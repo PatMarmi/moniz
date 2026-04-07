@@ -1,18 +1,16 @@
 "use client";
 
+import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import {
-  ShoppingCart,
-  Utensils,
-  Bus,
-  Tv,
-  CreditCard,
-  GraduationCap,
-  ShoppingBag,
-  Home,
-  PiggyBank,
-  MoreHorizontal,
-} from "lucide-react";
+import { PieChart, Plus, Pencil, LayoutTemplate } from "lucide-react";
+import { useAuth } from "@/components/auth-provider";
+import { createClient } from "@/lib/supabase/client";
+import { getCategoryByValue } from "@/lib/constants";
+import BudgetSheet from "@/components/budget-sheet";
+import TemplatePicker from "@/components/template-picker";
+import MonthSelector from "@/components/month-selector";
+import { monthStart, isCurrentMonth, formatMonth } from "@/lib/months";
+import type { Budget, Expense } from "@/types/database";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -25,108 +23,132 @@ const fadeUp = {
 
 const vp = { once: true, margin: "-40px" as const };
 
-const budgetCategories = [
-  { name: "Rent", icon: Home, spent: 650, limit: 650, color: "bg-brand-green" },
-  { name: "Groceries", icon: ShoppingCart, spent: 120, limit: 200, color: "bg-brand-accent" },
-  { name: "Eating out", icon: Utensils, spent: 85, limit: 100, color: "bg-brand-orange-soft" },
-  { name: "Transport", icon: Bus, spent: 40, limit: 80, color: "bg-brand-green" },
-  { name: "Entertainment", icon: Tv, spent: 55, limit: 60, color: "bg-brand-orange-soft" },
-  { name: "Subscriptions", icon: CreditCard, spent: 32, limit: 40, color: "bg-brand-accent" },
-  { name: "School", icon: GraduationCap, spent: 15, limit: 50, color: "bg-brand-green" },
-  { name: "Shopping", icon: ShoppingBag, spent: 40, limit: 60, color: "bg-brand-orange-soft" },
-  { name: "Savings", icon: PiggyBank, spent: 100, limit: 100, color: "bg-brand-accent" },
-  { name: "Other", icon: MoreHorizontal, spent: 20, limit: 50, color: "bg-brand-dark/30" },
-];
-
 export default function BudgetsPage() {
-  const totalSpent = budgetCategories.reduce((s, c) => s + c.spent, 0);
-  const totalLimit = budgetCategories.reduce((s, c) => s + c.limit, 0);
+  const { user, profile } = useAuth();
+  const [month, setMonth] = useState(() => monthStart());
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [editCategory, setEditCategory] = useState<string | undefined>();
+  const [editAmount, setEditAmount] = useState<number | undefined>();
+  const [templateOpen, setTemplateOpen] = useState(false);
+
+  const isCurrent = isCurrentMonth(month);
+  const monthlyIncome = Number(profile?.monthly_income) || 0;
+
+  const fetchData = useCallback(() => {
+    if (!user) return;
+    setLoading(true);
+    const supabase = createClient();
+    Promise.all([
+      supabase.from("budgets").select("*").eq("user_id", user.id).eq("month", month),
+      supabase.from("expenses").select("*").eq("user_id", user.id).eq("month", month),
+    ]).then(([budRes, expRes]) => {
+      setBudgets(budRes.data ?? []);
+      setExpenses(expRes.data ?? []);
+      setLoading(false);
+    });
+  }, [user, month]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  if (!user) return null;
+
+  const spentByCategory: Record<string, number> = {};
+  expenses.forEach((e) => { spentByCategory[e.category] = (spentByCategory[e.category] || 0) + Number(e.amount); });
+
+  const totalLimit = budgets.reduce((s, b) => s + Number(b.limit_amount), 0);
+  const totalSpent = budgets.reduce((s, b) => s + (spentByCategory[b.category] || 0), 0);
+  const spentPct = totalLimit > 0 ? Math.round((totalSpent / totalLimit) * 100) : 0;
+  const existingCategories = new Set(budgets.map((b) => b.category));
+
+  function openNewBudget() { setEditCategory(undefined); setEditAmount(undefined); setSheetOpen(true); }
+  function openEditBudget(cat: string, amount: number) { setEditCategory(cat); setEditAmount(amount); setSheetOpen(true); }
+
+  // Empty state
+  if (!loading && budgets.length === 0) {
+    return (
+      <div className="max-w-4xl space-y-5">
+        <div className="flex justify-center"><MonthSelector value={month} onChange={setMonth} /></div>
+        <motion.div initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={0} className="bg-brand-dark rounded-2xl p-8 sm:p-12 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-brand-accent/15 flex items-center justify-center mx-auto mb-5"><PieChart size={28} className="text-brand-accent" /></div>
+          <h2 className="text-xl font-bold text-brand-beige">{isCurrent ? "No budgets set" : `No budgets for ${formatMonth(month)}`}</h2>
+          <p className="text-sm text-brand-beige/40 mt-2 max-w-sm mx-auto leading-relaxed">{isCurrent ? "Set spending limits by category to see how your month is going." : "No budgets were set for this month."}</p>
+          {isCurrent && (
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-8">
+              {monthlyIncome > 0 && (
+                <button onClick={() => setTemplateOpen(true)} className="inline-flex items-center gap-2 bg-brand-accent text-white font-semibold px-6 py-3 rounded-full hover:bg-brand-accent/90 transition-colors text-sm"><LayoutTemplate size={16} strokeWidth={2} />Use a template</button>
+              )}
+              <button onClick={openNewBudget} className="inline-flex items-center gap-2 bg-brand-beige/10 text-brand-beige font-medium px-6 py-3 rounded-full hover:bg-brand-beige/15 transition-colors text-sm"><Plus size={16} strokeWidth={2.2} />Create manually</button>
+            </div>
+          )}
+          {isCurrent && monthlyIncome === 0 && <p className="text-xs text-brand-beige/25 mt-4">Set your monthly income in Settings to unlock budget templates.</p>}
+        </motion.div>
+
+        <BudgetSheet open={sheetOpen} onClose={() => setSheetOpen(false)} onSaved={fetchData} userId={user.id} month={month} existingCategories={existingCategories} editCategory={editCategory} editAmount={editAmount} />
+        {isCurrent && monthlyIncome > 0 && <TemplatePicker open={templateOpen} onClose={() => setTemplateOpen(false)} onApplied={fetchData} userId={user.id} month={month} monthlyIncome={monthlyIncome} />}
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl space-y-5">
+      <div className="flex justify-center"><MonthSelector value={month} onChange={setMonth} /></div>
+
       {/* Summary card */}
-      <motion.div
-        initial="hidden"
-        whileInView="visible"
-        viewport={vp}
-        variants={fadeUp}
-        custom={0}
-        className="bg-brand-dark rounded-2xl p-6"
-      >
-        <p className="text-brand-beige/40 text-xs font-semibold uppercase tracking-wider">
-          Total monthly budget
-        </p>
-        <div className="flex items-end gap-3 mt-2">
-          <p className="text-4xl font-bold text-brand-beige tracking-tight">
-            ${totalLimit.toLocaleString()}
-          </p>
-          <p className="text-brand-beige/30 text-sm pb-1">
-            ${totalSpent} spent · ${totalLimit - totalSpent} left
-          </p>
+      <motion.div initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={0} className="bg-brand-dark rounded-2xl p-6">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-brand-beige/40 text-xs font-semibold uppercase tracking-wider">Total monthly budget</p>
+            <div className="flex items-end gap-3 mt-2">
+              <p className="text-4xl font-bold text-brand-beige tracking-tight">${totalLimit.toLocaleString()}</p>
+              <p className="text-brand-beige/30 text-sm pb-1">${totalSpent.toFixed(0)} spent · ${(totalLimit - totalSpent).toFixed(0)} left</p>
+            </div>
+          </div>
+          {isCurrent && (
+            <div className="flex items-center gap-2">
+              {monthlyIncome > 0 && <button onClick={() => setTemplateOpen(true)} className="p-2 rounded-xl text-brand-beige/30 hover:text-brand-beige/60 hover:bg-brand-beige/5 transition-colors" aria-label="Budget templates"><LayoutTemplate size={18} strokeWidth={1.6} /></button>}
+              <button onClick={openNewBudget} className="flex items-center gap-2 bg-brand-accent text-white text-sm font-semibold px-4 py-2 rounded-full hover:bg-brand-accent/90 transition-colors active:scale-[0.97]"><Plus size={15} strokeWidth={2.2} />Add</button>
+            </div>
+          )}
         </div>
         <div className="mt-4 w-full h-2 bg-brand-beige/10 rounded-full overflow-hidden">
-          <motion.div
-            initial={{ width: 0 }}
-            whileInView={{ width: `${Math.round((totalSpent / totalLimit) * 100)}%` }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }}
-            className="h-full bg-brand-accent rounded-full"
-          />
+          <motion.div initial={{ width: 0 }} whileInView={{ width: `${Math.min(spentPct, 100)}%` }} viewport={{ once: true }} transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }} className="h-full bg-brand-accent rounded-full" />
         </div>
       </motion.div>
 
       {/* Category list */}
       <div className="space-y-3">
-        {budgetCategories.map((cat, i) => {
-          const pct = Math.min(Math.round((cat.spent / cat.limit) * 100), 100);
-          const isOver = cat.spent >= cat.limit;
-          const Icon = cat.icon;
-
+        {budgets.map((cat, i) => {
+          const spent = spentByCategory[cat.category] || 0;
+          const limit = Number(cat.limit_amount);
+          const p = Math.min(Math.round((spent / limit) * 100), 100);
+          const isOver = spent >= limit;
+          const catDef = getCategoryByValue(cat.category);
+          const Icon = catDef?.icon;
           return (
-            <motion.div
-              key={cat.name}
-              initial="hidden"
-              whileInView="visible"
-              viewport={vp}
-              variants={fadeUp}
-              custom={i % 4}
-              className="bg-white/60 backdrop-blur-sm rounded-2xl p-5 border border-brand-dark/5"
-            >
+            <motion.div key={cat.id} initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={i % 4} className="bg-white/60 backdrop-blur-sm rounded-2xl p-5 border border-brand-dark/5">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-brand-dark/5 flex items-center justify-center">
-                    <Icon size={17} strokeWidth={1.7} className="text-brand-dark/50" />
-                  </div>
-                  <p className="text-sm font-semibold text-brand-dark">{cat.name}</p>
+                  {Icon && <div className="w-9 h-9 rounded-xl bg-brand-dark/5 flex items-center justify-center"><Icon size={17} strokeWidth={1.7} className="text-brand-dark/50" /></div>}
+                  <p className="text-sm font-semibold text-brand-dark">{catDef?.label || cat.category}</p>
                 </div>
-                <p className="text-sm text-brand-dark/40">
-                  <span
-                    className={`font-bold ${isOver ? "text-brand-accent" : "text-brand-dark"}`}
-                  >
-                    ${cat.spent}
-                  </span>
-                  {" / "}${cat.limit}
-                </p>
+                <div className="flex items-center gap-3">
+                  <p className="text-sm text-brand-dark/40"><span className={`font-bold ${isOver ? "text-brand-accent" : "text-brand-dark"}`}>${spent.toFixed(0)}</span>{" / "}${limit}</p>
+                  {isCurrent && <button onClick={() => openEditBudget(cat.category, limit)} className="p-1.5 rounded-lg text-brand-dark/20 hover:text-brand-dark/50 hover:bg-brand-dark/5 transition-colors" aria-label={`Edit ${catDef?.label || cat.category} budget`}><Pencil size={14} /></button>}
+                </div>
               </div>
-              <div className="w-full h-2 bg-brand-dark/5 rounded-full overflow-hidden">
-                <div
-                  className={`h-full rounded-full transition-all ${isOver ? "bg-brand-accent" : cat.color}`}
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-              <p className="text-[11px] text-brand-dark/30 mt-2">
-                {isOver
-                  ? "Budget reached"
-                  : `$${cat.limit - cat.spent} remaining`}
-              </p>
+              <div className="w-full h-2 bg-brand-dark/5 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${isOver ? "bg-brand-accent" : "bg-brand-green"}`} style={{ width: `${p}%` }} /></div>
+              <p className="text-[11px] text-brand-dark/30 mt-2">{isOver ? "Budget reached" : `$${(limit - spent).toFixed(0)} remaining`}</p>
             </motion.div>
           );
         })}
       </div>
 
-      <p className="text-xs text-brand-dark/25 text-center pt-2">
-        Sample budget data — editable budgets coming soon.
-      </p>
+      <BudgetSheet open={sheetOpen} onClose={() => setSheetOpen(false)} onSaved={fetchData} userId={user.id} month={month} existingCategories={existingCategories} editCategory={editCategory} editAmount={editAmount} />
+      {isCurrent && monthlyIncome > 0 && <TemplatePicker open={templateOpen} onClose={() => setTemplateOpen(false)} onApplied={fetchData} userId={user.id} month={month} monthlyIncome={monthlyIncome} />}
     </div>
   );
 }

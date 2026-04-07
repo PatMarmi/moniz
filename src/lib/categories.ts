@@ -1,19 +1,4 @@
-import {
-  ShoppingCart,
-  Utensils,
-  Bus,
-  Tv,
-  CreditCard,
-  Coffee,
-  ShoppingBag,
-  Home,
-  GraduationCap,
-  PiggyBank,
-  MoreHorizontal,
-  Dumbbell,
-  Smartphone,
-  Film,
-} from "lucide-react";
+import { CATEGORIES, getCategoryByValue } from "@/lib/constants";
 import type { LucideIcon } from "lucide-react";
 
 export interface CategoryStyle {
@@ -25,9 +10,9 @@ export interface CategoryStyle {
   chipText: string;
 }
 
-const styles: Record<string, CategoryStyle> = {
+// Visual styles per category — keyed by the canonical category value
+const styleMap: Record<string, Omit<CategoryStyle, "icon">> = {
   rent: {
-    icon: Home,
     iconBg: "bg-brand-green/10",
     iconColor: "text-brand-green",
     accentBorder: "border-l-brand-green",
@@ -35,15 +20,13 @@ const styles: Record<string, CategoryStyle> = {
     chipText: "text-brand-green",
   },
   groceries: {
-    icon: ShoppingCart,
     iconBg: "bg-brand-green/10",
     iconColor: "text-brand-green",
     accentBorder: "border-l-brand-green",
     chipBg: "bg-brand-green/10",
     chipText: "text-brand-green",
   },
-  "eating out": {
-    icon: Utensils,
+  eating_out: {
     iconBg: "bg-brand-accent/10",
     iconColor: "text-brand-accent",
     accentBorder: "border-l-brand-accent",
@@ -51,7 +34,6 @@ const styles: Record<string, CategoryStyle> = {
     chipText: "text-brand-accent",
   },
   coffee: {
-    icon: Coffee,
     iconBg: "bg-brand-orange-soft/15",
     iconColor: "text-brand-orange-soft",
     accentBorder: "border-l-brand-orange-soft",
@@ -59,7 +41,6 @@ const styles: Record<string, CategoryStyle> = {
     chipText: "text-brand-orange-soft",
   },
   transport: {
-    icon: Bus,
     iconBg: "bg-brand-orange-soft/10",
     iconColor: "text-brand-orange-soft",
     accentBorder: "border-l-brand-orange-soft",
@@ -67,7 +48,6 @@ const styles: Record<string, CategoryStyle> = {
     chipText: "text-brand-orange-soft",
   },
   entertainment: {
-    icon: Tv,
     iconBg: "bg-brand-accent/10",
     iconColor: "text-brand-accent",
     accentBorder: "border-l-brand-accent",
@@ -75,7 +55,6 @@ const styles: Record<string, CategoryStyle> = {
     chipText: "text-brand-accent",
   },
   subscriptions: {
-    icon: CreditCard,
     iconBg: "bg-brand-dark/8",
     iconColor: "text-brand-dark/60",
     accentBorder: "border-l-brand-dark/30",
@@ -83,7 +62,6 @@ const styles: Record<string, CategoryStyle> = {
     chipText: "text-brand-dark/60",
   },
   shopping: {
-    icon: ShoppingBag,
     iconBg: "bg-brand-orange-soft/10",
     iconColor: "text-brand-orange-soft",
     accentBorder: "border-l-brand-orange-soft",
@@ -91,7 +69,6 @@ const styles: Record<string, CategoryStyle> = {
     chipText: "text-brand-orange-soft",
   },
   school: {
-    icon: GraduationCap,
     iconBg: "bg-brand-green/8",
     iconColor: "text-brand-green/70",
     accentBorder: "border-l-brand-green/40",
@@ -99,31 +76,6 @@ const styles: Record<string, CategoryStyle> = {
     chipText: "text-brand-green/70",
   },
   savings: {
-    icon: PiggyBank,
-    iconBg: "bg-brand-accent/10",
-    iconColor: "text-brand-accent",
-    accentBorder: "border-l-brand-accent",
-    chipBg: "bg-brand-accent/10",
-    chipText: "text-brand-accent",
-  },
-  gym: {
-    icon: Dumbbell,
-    iconBg: "bg-brand-green/10",
-    iconColor: "text-brand-green",
-    accentBorder: "border-l-brand-green",
-    chipBg: "bg-brand-green/10",
-    chipText: "text-brand-green",
-  },
-  phone: {
-    icon: Smartphone,
-    iconBg: "bg-brand-dark/8",
-    iconColor: "text-brand-dark/60",
-    accentBorder: "border-l-brand-dark/30",
-    chipBg: "bg-brand-dark/5",
-    chipText: "text-brand-dark/60",
-  },
-  netflix: {
-    icon: Film,
     iconBg: "bg-brand-accent/10",
     iconColor: "text-brand-accent",
     accentBorder: "border-l-brand-accent",
@@ -131,7 +83,6 @@ const styles: Record<string, CategoryStyle> = {
     chipText: "text-brand-accent",
   },
   other: {
-    icon: MoreHorizontal,
     iconBg: "bg-brand-dark/5",
     iconColor: "text-brand-dark/40",
     accentBorder: "border-l-brand-dark/15",
@@ -140,8 +91,16 @@ const styles: Record<string, CategoryStyle> = {
   },
 };
 
-const fallback: CategoryStyle = styles.other;
+const fallbackStyle: Omit<CategoryStyle, "icon"> = styleMap.other;
 
 export function getCategoryStyle(category: string): CategoryStyle {
-  return styles[category.toLowerCase()] ?? fallback;
+  // Normalize: try direct match, then lowercase, then fallback
+  const key = category.toLowerCase().replace(/\s+/g, "_");
+  const catDef = getCategoryByValue(key);
+  const style = styleMap[key] ?? fallbackStyle;
+
+  return {
+    icon: catDef?.icon ?? CATEGORIES[CATEGORIES.length - 1].icon,
+    ...style,
+  };
 }

@@ -357,10 +357,10 @@ export default function Home() {
             students.
           </p>
           <div className="flex items-center gap-5 text-xs text-brand-dark/30">
-            <a href="#" className="hover:text-brand-dark/60 transition-colors">
+            <a href="/privacy" className="hover:text-brand-dark/60 transition-colors">
               Privacy
             </a>
-            <a href="#" className="hover:text-brand-dark/60 transition-colors">
+            <a href="/terms" className="hover:text-brand-dark/60 transition-colors">
               Terms
             </a>
           </div>

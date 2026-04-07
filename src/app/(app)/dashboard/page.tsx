@@ -1,16 +1,21 @@
 "use client";
 
+import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import {
   TrendingDown,
+  TrendingUp,
   Calendar,
-  ShoppingCart,
-  Utensils,
-  Bus,
-  Tv,
-  CreditCard,
   ArrowUpRight,
+  Plus,
+  Wallet,
 } from "lucide-react";
+import { useAuth } from "@/components/auth-provider";
+import { createClient } from "@/lib/supabase/client";
+import { getCategoryByValue } from "@/lib/constants";
+import MonthSelector from "@/components/month-selector";
+import { monthStart, isCurrentMonth, daysLeftIn, prevMonthStart, formatMonth } from "@/lib/months";
+import type { Expense, Budget, RecurringExpense } from "@/types/database";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -23,255 +28,253 @@ const fadeUp = {
 
 const vp = { once: true, margin: "-40px" as const };
 
-const categories = [
-  { name: "Groceries", icon: ShoppingCart, spent: 120, limit: 200, color: "bg-brand-accent" },
-  { name: "Eating out", icon: Utensils, spent: 85, limit: 100, color: "bg-brand-orange-soft" },
-  { name: "Transport", icon: Bus, spent: 40, limit: 80, color: "bg-brand-green" },
-  { name: "Subscriptions", icon: CreditCard, spent: 32, limit: 40, color: "bg-brand-accent" },
-  { name: "Entertainment", icon: Tv, spent: 55, limit: 60, color: "bg-brand-orange-soft" },
-];
-
-const upcomingBills = [
-  { name: "Netflix", amount: "$15.49", due: "Mar 30" },
-  { name: "Phone bill", amount: "$45.00", due: "Apr 1" },
-  { name: "Gym", amount: "$29.99", due: "Apr 3" },
-];
-
-const recentExpenses = [
-  { category: "Groceries", icon: ShoppingCart, amount: "$34.50", date: "Today" },
-  { category: "Transport", icon: Bus, amount: "$12.00", date: "Yesterday" },
-  { category: "Eating out", icon: Utensils, amount: "$18.75", date: "Mar 25" },
-];
-
 export default function DashboardPage() {
-  const totalBudget = 1200;
-  const totalSpent = 743;
+  const { user } = useAuth();
+  const [month, setMonth] = useState(() => monthStart());
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [recurring, setRecurring] = useState<RecurringExpense[]>([]);
+  const [prevExpenses, setPrevExpenses] = useState<Expense[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = useCallback(() => {
+    if (!user) return;
+    setLoading(true);
+
+    const supabase = createClient();
+    const prevMonth = prevMonthStart(month);
+
+    Promise.all([
+      supabase.from("expenses").select("*").eq("user_id", user.id).eq("month", month).order("date", { ascending: false }),
+      supabase.from("budgets").select("*").eq("user_id", user.id).eq("month", month),
+      supabase.from("recurring_expenses").select("*").eq("user_id", user.id).eq("is_active", true),
+      supabase.from("expenses").select("*").eq("user_id", user.id).eq("month", prevMonth),
+    ]).then(([expRes, budRes, recRes, prevExpRes]) => {
+      setExpenses(expRes.data ?? []);
+      setBudgets(budRes.data ?? []);
+      setRecurring(recRes.data ?? []);
+      setPrevExpenses(prevExpRes.data ?? []);
+      setLoading(false);
+    });
+  }, [user, month]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  if (!user) return null;
+
+  const isCurrent = isCurrentMonth(month);
+  const daysLeft = daysLeftIn(month);
+  const totalBudget = budgets.reduce((s, b) => s + Number(b.limit_amount), 0);
+  const totalSpent = expenses.reduce((s, e) => s + Number(e.amount), 0);
   const remaining = totalBudget - totalSpent;
-  const spentPct = Math.round((totalSpent / totalBudget) * 100);
-  const daysLeft = 12;
+  const spentPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
+  const prevTotalSpent = prevExpenses.reduce((s, e) => s + Number(e.amount), 0);
+
+  const spentByCategory: Record<string, number> = {};
+  expenses.forEach((e) => {
+    spentByCategory[e.category] = (spentByCategory[e.category] || 0) + Number(e.amount);
+  });
+
+  const categoryBudgets = budgets.map((b) => ({
+    ...b,
+    spent: spentByCategory[b.category] || 0,
+    catDef: getCategoryByValue(b.category),
+  }));
+
+  const recentExpenses = expenses.slice(0, 5);
+  const hasData = budgets.length > 0 || expenses.length > 0;
+
+  // Month-over-month comparison
+  const spentDiff = totalSpent - prevTotalSpent;
+  const hasPrevData = prevExpenses.length > 0;
+
+  // Empty state
+  if (!loading && !hasData) {
+    return (
+      <div className="max-w-4xl space-y-4">
+        <div className="flex justify-center"><MonthSelector value={month} onChange={setMonth} /></div>
+        <motion.div initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={0} className="bg-brand-dark rounded-2xl p-8 sm:p-12 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-brand-accent/15 flex items-center justify-center mx-auto mb-5"><Wallet size={28} className="text-brand-accent" /></div>
+          <h2 className="text-xl font-bold text-brand-beige">{isCurrent ? "Welcome to Moniz" : `No data for ${formatMonth(month)}`}</h2>
+          <p className="text-sm text-brand-beige/40 mt-2 max-w-sm mx-auto leading-relaxed">{isCurrent ? "Start by adding your first expense or setting up your monthly budget." : "No expenses or budgets were recorded this month."}</p>
+          {isCurrent && (
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-8">
+              <a href="/expenses" className="flex items-center gap-2 bg-brand-accent text-white font-semibold px-6 py-3 rounded-full hover:bg-brand-accent/90 transition-colors text-sm"><Plus size={16} />Add first expense</a>
+              <a href="/budgets" className="flex items-center gap-2 bg-brand-beige/10 text-brand-beige font-medium px-6 py-3 rounded-full hover:bg-brand-beige/15 transition-colors text-sm">Set up budget</a>
+            </div>
+          )}
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl space-y-5">
-      {/* ── Big number hero card ── */}
-      <motion.div
-        initial="hidden"
-        whileInView="visible"
-        viewport={vp}
-        variants={fadeUp}
-        custom={0}
-        className="bg-brand-dark rounded-2xl p-6 sm:p-8"
-      >
+      {/* Month selector */}
+      <div className="flex justify-center"><MonthSelector value={month} onChange={setMonth} /></div>
+
+      {/* Big number hero */}
+      <motion.div initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={0} className="bg-brand-dark rounded-2xl p-6 sm:p-8">
         <div className="flex items-start justify-between">
           <div>
-            <p className="text-brand-beige/40 text-xs font-semibold uppercase tracking-wider">
-              Left to spend
-            </p>
-            <p className="text-5xl sm:text-6xl font-bold text-brand-beige mt-2 tracking-tight">
-              ${remaining}
-            </p>
+            <p className="text-brand-beige/40 text-xs font-semibold uppercase tracking-wider">{isCurrent ? "Left to spend" : "Month summary"}</p>
+            <p className="text-5xl sm:text-6xl font-bold text-brand-beige mt-2 tracking-tight">{totalBudget > 0 ? `$${remaining.toLocaleString()}` : `$${totalSpent.toLocaleString()}`}</p>
             <p className="text-brand-beige/30 text-sm mt-2">
-              of ${totalBudget.toLocaleString()} this month · {daysLeft} days left
+              {totalBudget > 0 ? `of $${totalBudget.toLocaleString()}` : `total spent`}
+              {isCurrent && ` · ${daysLeft} days left`}
             </p>
           </div>
-
           <div className="flex flex-col items-end gap-2">
-            <span className="text-xs font-semibold text-brand-accent bg-brand-accent/10 px-3 py-1 rounded-full">
-              On track
-            </span>
+            {totalBudget > 0 && (
+              <span className={`text-xs font-semibold px-3 py-1 rounded-full ${remaining >= 0 ? "text-brand-accent bg-brand-accent/10" : "text-brand-beige bg-brand-beige/10"}`}>
+                {remaining >= 0 ? "On track" : "Over budget"}
+              </span>
+            )}
             <div className="text-right mt-2 hidden sm:block">
               <p className="text-brand-beige/40 text-xs">Spent</p>
-              <p className="text-brand-beige text-lg font-bold">${totalSpent}</p>
+              <p className="text-brand-beige text-lg font-bold">${totalSpent.toLocaleString()}</p>
             </div>
           </div>
         </div>
 
-        {/* Spend progress bar */}
-        <div className="mt-6">
-          <div className="w-full h-2 bg-brand-beige/10 rounded-full overflow-hidden">
-            <motion.div
-              initial={{ width: 0 }}
-              whileInView={{ width: `${spentPct}%` }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.8, delay: 0.3, ease: "easeOut" }}
-              className="h-full bg-brand-accent rounded-full"
-            />
+        {totalBudget > 0 && (
+          <div className="mt-6">
+            <div className="w-full h-2 bg-brand-beige/10 rounded-full overflow-hidden">
+              <motion.div initial={{ width: 0 }} whileInView={{ width: `${Math.min(spentPct, 100)}%` }} viewport={{ once: true }} transition={{ duration: 0.8, delay: 0.3, ease: "easeOut" }} className="h-full bg-brand-accent rounded-full" />
+            </div>
+            <div className="flex justify-between mt-2">
+              <span className="text-[11px] text-brand-beige/30">{spentPct}% spent</span>
+              <span className="text-[11px] text-brand-beige/30">${totalBudget.toLocaleString()}</span>
+            </div>
           </div>
-          <div className="flex justify-between mt-2">
-            <span className="text-[11px] text-brand-beige/30">{spentPct}% spent</span>
-            <span className="text-[11px] text-brand-beige/30">${totalBudget.toLocaleString()}</span>
-          </div>
-        </div>
+        )}
       </motion.div>
 
-      {/* ── Stats row ── */}
+      {/* Stats row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: "Daily average", value: "$38", sub: "per day" },
-          { label: "Budget used", value: `${spentPct}%`, sub: "of total" },
-          { label: "Top category", value: "Food", sub: "$205 total" },
-          { label: "Days left", value: `${daysLeft}`, sub: "this month" },
+          { label: "Total spent", value: `$${totalSpent.toFixed(0)}`, sub: expenses.length + " expenses" },
+          { label: "Budget used", value: totalBudget > 0 ? `${spentPct}%` : "—", sub: totalBudget > 0 ? "of total" : "no budget" },
+          { label: "Expenses", value: `${expenses.length}`, sub: formatMonth(month) },
+          ...(isCurrent
+            ? [{ label: "Days left", value: `${daysLeft}`, sub: "this month" }]
+            : hasPrevData
+            ? [{
+                label: "vs last month",
+                value: spentDiff <= 0 ? `-$${Math.abs(spentDiff).toFixed(0)}` : `+$${spentDiff.toFixed(0)}`,
+                sub: spentDiff <= 0 ? "less spent" : "more spent",
+              }]
+            : [{ label: "Days left", value: "0", sub: "month ended" }]
+          ),
         ].map((stat, i) => (
-          <motion.div
-            key={stat.label}
-            initial="hidden"
-            whileInView="visible"
-            viewport={vp}
-            variants={fadeUp}
-            custom={i}
-            className="bg-white/60 backdrop-blur-sm rounded-2xl p-4 border border-brand-dark/5"
-          >
-            <p className="text-[11px] text-brand-dark/40 font-medium uppercase tracking-wide">
-              {stat.label}
-            </p>
+          <motion.div key={stat.label} initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={i} className="bg-white/60 backdrop-blur-sm rounded-2xl p-4 border border-brand-dark/5">
+            <p className="text-[11px] text-brand-dark/40 font-medium uppercase tracking-wide">{stat.label}</p>
             <p className="text-xl font-bold text-brand-dark mt-1">{stat.value}</p>
             <p className="text-xs text-brand-dark/30 mt-0.5">{stat.sub}</p>
           </motion.div>
         ))}
       </div>
 
-      {/* ── Category budgets + Upcoming bills side-by-side ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-        {/* Category progress */}
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={vp}
-          variants={fadeUp}
-          custom={0}
-          className="lg:col-span-3 bg-white/60 backdrop-blur-sm rounded-2xl p-5 border border-brand-dark/5"
-        >
-          <h2 className="text-sm font-bold text-brand-dark mb-4">
-            Budget by category
-          </h2>
-          <div className="space-y-4">
-            {categories.map((cat) => {
-              const pct = Math.min(Math.round((cat.spent / cat.limit) * 100), 100);
-              const isOver = cat.spent >= cat.limit;
-              const Icon = cat.icon;
+      {/* Month-over-month comparison card */}
+      {hasPrevData && totalSpent > 0 && (
+        <motion.div initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={0} className="bg-white/60 backdrop-blur-sm rounded-2xl p-5 border border-brand-dark/5">
+          <div className="flex items-center gap-3">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${spentDiff <= 0 ? "bg-brand-green/10" : "bg-brand-accent/10"}`}>
+              {spentDiff <= 0 ? <TrendingDown size={16} className="text-brand-green" /> : <TrendingUp size={16} className="text-brand-accent" />}
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-brand-dark">
+                {spentDiff <= 0
+                  ? `You spent $${Math.abs(spentDiff).toFixed(0)} less than last month`
+                  : `You spent $${spentDiff.toFixed(0)} more than last month`}
+              </p>
+              <p className="text-xs text-brand-dark/35 mt-0.5">
+                ${totalSpent.toFixed(0)} this month vs ${prevTotalSpent.toFixed(0)} last month
+              </p>
+            </div>
+          </div>
+        </motion.div>
+      )}
 
-              return (
-                <div key={cat.name}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-7 h-7 rounded-lg bg-brand-dark/5 flex items-center justify-center">
-                        <Icon size={14} strokeWidth={1.8} className="text-brand-dark/50" />
+      {/* Category budgets + Upcoming bills */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+        <motion.div initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={0} className="lg:col-span-3 bg-white/60 backdrop-blur-sm rounded-2xl p-5 border border-brand-dark/5">
+          <h2 className="text-sm font-bold text-brand-dark mb-4">Budget by category</h2>
+          {categoryBudgets.length === 0 ? (
+            <p className="text-sm text-brand-dark/30">No budgets set for this month.</p>
+          ) : (
+            <div className="space-y-4">
+              {categoryBudgets.map((cat) => {
+                const p = Math.min(Math.round((cat.spent / Number(cat.limit_amount)) * 100), 100);
+                const isOver = cat.spent >= Number(cat.limit_amount);
+                const Icon = cat.catDef?.icon;
+                return (
+                  <div key={cat.id}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-2.5">
+                        {Icon && <div className="w-7 h-7 rounded-lg bg-brand-dark/5 flex items-center justify-center"><Icon size={14} strokeWidth={1.8} className="text-brand-dark/50" /></div>}
+                        <span className="text-sm font-medium text-brand-dark">{cat.catDef?.label || cat.category}</span>
                       </div>
-                      <span className="text-sm font-medium text-brand-dark">
-                        {cat.name}
-                      </span>
+                      <span className="text-xs text-brand-dark/40"><span className={`font-semibold ${isOver ? "text-brand-accent" : "text-brand-dark"}`}>${cat.spent}</span> / ${Number(cat.limit_amount)}</span>
                     </div>
-                    <span className="text-xs text-brand-dark/40">
-                      <span className={`font-semibold ${isOver ? "text-brand-accent" : "text-brand-dark"}`}>
-                        ${cat.spent}
-                      </span>
-                      {" / "}${cat.limit}
-                    </span>
+                    <div className="w-full h-1.5 bg-brand-dark/5 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full transition-all ${isOver ? "bg-brand-accent" : "bg-brand-green"}`} style={{ width: `${p}%` }} />
+                    </div>
                   </div>
-                  <div className="w-full h-1.5 bg-brand-dark/5 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${isOver ? "bg-brand-accent" : cat.color}`}
-                      style={{ width: `${pct}%` }}
-                    />
+                );
+              })}
+            </div>
+          )}
+        </motion.div>
+
+        <motion.div initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={1} className="lg:col-span-2 bg-white/60 backdrop-blur-sm rounded-2xl p-5 border border-brand-dark/5">
+          <div className="flex items-center gap-2 mb-4"><Calendar size={15} strokeWidth={1.8} className="text-brand-dark/40" /><h2 className="text-sm font-bold text-brand-dark">Upcoming bills</h2></div>
+          {recurring.length === 0 ? (
+            <p className="text-sm text-brand-dark/30">No recurring expenses yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {recurring.map((bill) => (
+                <div key={bill.id} className="flex items-center justify-between bg-brand-dark/[0.03] rounded-xl px-4 py-3">
+                  <div>
+                    <p className="text-sm font-medium text-brand-dark">{bill.name}</p>
+                    <p className="text-xs text-brand-dark/30 mt-0.5">Due on the {bill.due_day}{bill.due_day === 1 ? "st" : bill.due_day === 2 ? "nd" : bill.due_day === 3 ? "rd" : "th"}</p>
                   </div>
+                  <p className="text-sm font-semibold text-brand-dark">${Number(bill.amount).toFixed(2)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      </div>
+
+      {/* Recent expenses */}
+      <motion.div initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={0} className="bg-white/60 backdrop-blur-sm rounded-2xl border border-brand-dark/5 overflow-hidden">
+        <div className="flex items-center justify-between px-5 pt-5 pb-3">
+          <h2 className="text-sm font-bold text-brand-dark">Recent expenses</h2>
+          <a href="/expenses" className="text-xs font-medium text-brand-accent flex items-center gap-0.5 hover:underline">View all <ArrowUpRight size={12} /></a>
+        </div>
+        {recentExpenses.length === 0 ? (
+          <p className="text-sm text-brand-dark/30 px-5 pb-5">No expenses this month.</p>
+        ) : (
+          <div className="divide-y divide-brand-dark/5">
+            {recentExpenses.map((exp) => {
+              const catDef = getCategoryByValue(exp.category);
+              const Icon = catDef?.icon;
+              return (
+                <div key={exp.id} className="flex items-center justify-between px-5 py-3.5">
+                  <div className="flex items-center gap-3">
+                    {Icon && <div className="w-8 h-8 rounded-lg bg-brand-dark/5 flex items-center justify-center"><Icon size={15} strokeWidth={1.8} className="text-brand-dark/50" /></div>}
+                    <div>
+                      <p className="text-sm font-medium text-brand-dark">{catDef?.label || exp.category}</p>
+                      <p className="text-xs text-brand-dark/30">{exp.date}</p>
+                    </div>
+                  </div>
+                  <p className="text-sm font-semibold text-brand-dark">${Number(exp.amount).toFixed(2)}</p>
                 </div>
               );
             })}
           </div>
-        </motion.div>
-
-        {/* Upcoming bills */}
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={vp}
-          variants={fadeUp}
-          custom={1}
-          className="lg:col-span-2 bg-white/60 backdrop-blur-sm rounded-2xl p-5 border border-brand-dark/5"
-        >
-          <div className="flex items-center gap-2 mb-4">
-            <Calendar size={15} strokeWidth={1.8} className="text-brand-dark/40" />
-            <h2 className="text-sm font-bold text-brand-dark">Upcoming bills</h2>
-          </div>
-          <div className="space-y-3">
-            {upcomingBills.map((bill) => (
-              <div
-                key={bill.name}
-                className="flex items-center justify-between bg-brand-dark/[0.03] rounded-xl px-4 py-3"
-              >
-                <div>
-                  <p className="text-sm font-medium text-brand-dark">{bill.name}</p>
-                  <p className="text-xs text-brand-dark/30 mt-0.5">{bill.due}</p>
-                </div>
-                <p className="text-sm font-semibold text-brand-dark">{bill.amount}</p>
-              </div>
-            ))}
-          </div>
-        </motion.div>
-      </div>
-
-      {/* ── Recent expenses ── */}
-      <motion.div
-        initial="hidden"
-        whileInView="visible"
-        viewport={vp}
-        variants={fadeUp}
-        custom={0}
-        className="bg-white/60 backdrop-blur-sm rounded-2xl border border-brand-dark/5 overflow-hidden"
-      >
-        <div className="flex items-center justify-between px-5 pt-5 pb-3">
-          <h2 className="text-sm font-bold text-brand-dark">Recent expenses</h2>
-          <a
-            href="/expenses"
-            className="text-xs font-medium text-brand-accent flex items-center gap-0.5 hover:underline"
-          >
-            View all <ArrowUpRight size={12} />
-          </a>
-        </div>
-        <div className="divide-y divide-brand-dark/5">
-          {recentExpenses.map((exp) => {
-            const Icon = exp.icon;
-            return (
-              <div
-                key={exp.category + exp.date}
-                className="flex items-center justify-between px-5 py-3.5"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-brand-dark/5 flex items-center justify-center">
-                    <Icon size={15} strokeWidth={1.8} className="text-brand-dark/50" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-brand-dark">{exp.category}</p>
-                    <p className="text-xs text-brand-dark/30">{exp.date}</p>
-                  </div>
-                </div>
-                <p className="text-sm font-semibold text-brand-dark">{exp.amount}</p>
-              </div>
-            );
-          })}
-        </div>
-      </motion.div>
-
-      {/* ── Quick insight ── */}
-      <motion.div
-        initial="hidden"
-        whileInView="visible"
-        viewport={vp}
-        variants={fadeUp}
-        custom={0}
-        className="bg-brand-dark rounded-2xl p-5 flex items-start gap-4"
-      >
-        <div className="w-8 h-8 rounded-lg bg-brand-accent/15 flex items-center justify-center shrink-0 mt-0.5">
-          <TrendingDown size={16} className="text-brand-accent" />
-        </div>
-        <div>
-          <h3 className="text-sm font-semibold text-brand-beige">
-            Eating out is higher than groceries
-          </h3>
-          <p className="text-sm text-brand-beige/40 mt-1 leading-relaxed">
-            You&apos;ve spent $85 on eating out vs $120 on groceries. Cooking a few more
-            meals could save you around $40 this month.
-          </p>
-        </div>
+        )}
       </motion.div>
     </div>
   );

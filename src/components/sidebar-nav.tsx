@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/components/auth-provider";
 import {
   LayoutDashboard,
   Receipt,
@@ -24,6 +25,10 @@ const navItems = [
 
 export default function SidebarNav() {
   const pathname = usePathname();
+  const { user, profile } = useAuth();
+
+  const displayName = profile?.full_name || user?.email?.split("@")[0] || "Student";
+  const initials = displayName.slice(0, 2).toUpperCase();
 
   return (
     <aside className="hidden md:flex md:flex-col md:w-60 bg-brand-dark fixed inset-y-0 left-0 z-30">
@@ -65,11 +70,11 @@ export default function SidebarNav() {
       <div className="px-3 pb-5">
         <div className="flex items-center gap-3 px-3 py-3 rounded-xl bg-brand-green/40">
           <div className="w-8 h-8 rounded-full bg-brand-accent/20 flex items-center justify-center text-brand-accent text-xs font-bold">
-            S
+            {initials}
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-brand-beige truncate">
-              Student
+              {displayName}
             </p>
             <p className="text-xs text-brand-beige/30 truncate">Free plan</p>
           </div>
