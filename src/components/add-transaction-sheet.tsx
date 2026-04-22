@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X,
@@ -24,29 +24,94 @@ import { rateLimit } from "@/lib/rate-limit";
 import { getCategoryStyle } from "@/lib/categories";
 import type { Account, Transaction } from "@/types/database";
 
-/** UI-level mode — distinct from DB-level type values */
+/* ── UI mode (separate from DB-level type values) ── */
 type Mode = "expense" | "income" | "transfer";
+
+const MODES: ReadonlyArray<{ value: Mode; label: string }> = [
+  { value: "expense", label: "Expense" },
+  { value: "income", label: "Income" },
+  { value: "transfer", label: "Transfer" },
+];
+
+/** Per-mode color tokens. Centralized so Add/Edit, CTA, amount all stay in sync. */
+const MODE_THEME: Record<
+  Mode,
+  {
+    /** Active tab text color */
+    tabText: string;
+    /** Amount input text color */
+    amountText: string;
+    /** Currency prefix color */
+    amountPrefix: string;
+    /** Submit button background */
+    cta: string;
+    /** Submit button hover */
+    ctaHover: string;
+    /** Success state */
+    ctaSuccess: string;
+  }
+> = {
+  expense: {
+    tabText: "text-brand-dark",
+    amountText: "text-brand-dark",
+    amountPrefix: "text-brand-dark/30",
+    cta: "bg-brand-accent",
+    ctaHover: "hover:bg-brand-accent/90",
+    ctaSuccess: "bg-brand-green",
+  },
+  income: {
+    tabText: "text-brand-green",
+    amountText: "text-brand-green",
+    amountPrefix: "text-brand-green/60",
+    cta: "bg-brand-green",
+    ctaHover: "hover:bg-brand-green/90",
+    ctaSuccess: "bg-brand-green",
+  },
+  transfer: {
+    tabText: "text-brand-dark",
+    amountText: "text-brand-dark",
+    amountPrefix: "text-brand-dark/30",
+    cta: "bg-brand-dark",
+    ctaHover: "hover:bg-brand-dark/90",
+    ctaSuccess: "bg-brand-green",
+  },
+};
+
+/* ── localStorage keys for smart defaults ── */
+const LS_LAST_ACCOUNT = "moniz:last-account";
+const lsLastCategory = (mode: Mode) => `moniz:last-category:${mode}`;
 
 interface AddTransactionSheetProps {
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
   userId: string;
-  /** Accounts available in the picker (active + current edit's archived account) */
   accounts: Account[];
   defaultCurrency: string;
   editTransaction?: Transaction | null;
   defaultAccountId?: string;
 }
 
-/**
- * Map a DB row's `type` to the UI mode.
- * transfer_in / transfer_out both come from "transfer" mode.
- */
 function modeFromTxType(t: Transaction["type"]): Mode {
   if (t === "income") return "income";
   if (t === "transfer_in" || t === "transfer_out") return "transfer";
   return "expense";
+}
+
+/** Read a value from localStorage, returning null on any failure. */
+function lsGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function lsSet(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* noop */
+  }
 }
 
 export default function AddTransactionSheet({
@@ -64,8 +129,6 @@ export default function AddTransactionSheet({
   const [mode, setMode] = useState<Mode>("expense");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
-  // For income/expense: the affected account.
-  // For transfer: the source account (paired with toAccountId).
   const [accountId, setAccountId] = useState("");
   const [toAccountId, setToAccountId] = useState("");
   const [note, setNote] = useState("");
@@ -75,6 +138,31 @@ export default function AddTransactionSheet({
   const [success, setSuccess] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  /* Pick a smart default account for create mode */
+  const pickDefaultAccount = (currentMode: Mode): string => {
+    if (defaultAccountId && accounts.some((a) => a.id === defaultAccountId)) {
+      return defaultAccountId;
+    }
+    const lastUsed = lsGet(LS_LAST_ACCOUNT);
+    if (lastUsed && accounts.some((a) => a.id === lastUsed && !a.archived_at)) {
+      return lastUsed;
+    }
+    void currentMode; // reserved if we want per-mode account memory later
+    return accounts.find((a) => !a.archived_at)?.id || accounts[0]?.id || "";
+  };
+
+  /* Pick a smart default category for create mode */
+  const pickDefaultCategory = (currentMode: Mode): string => {
+    if (currentMode === "transfer") return "";
+    const last = lsGet(lsLastCategory(currentMode));
+    if (!last) return "";
+    const valid =
+      currentMode === "income"
+        ? INCOME_CATEGORIES.some((c) => c.value === last)
+        : CATEGORIES.some((c) => c.value === last);
+    return valid ? last : "";
+  };
 
   // Reset state on open / when edit target changes
   useEffect(() => {
@@ -89,10 +177,6 @@ export default function AddTransactionSheet({
       setDate(editTransaction.date);
 
       if (editMode === "transfer") {
-        // The row we render in the ledger is always the transfer_out side.
-        // account_id = source, paired_account_id = destination.
-        // If we somehow got handed a transfer_in row, swap so the form
-        // still feels source → destination from the user's perspective.
         if (editTransaction.type === "transfer_out") {
           setAccountId(editTransaction.account_id);
           setToAccountId(editTransaction.paired_account_id || "");
@@ -105,10 +189,11 @@ export default function AddTransactionSheet({
         setToAccountId("");
       }
     } else {
-      setMode("expense");
+      const startMode: Mode = "expense";
+      setMode(startMode);
       setAmount("");
-      setCategory("");
-      setAccountId(defaultAccountId || accounts[0]?.id || "");
+      setCategory(pickDefaultCategory(startMode));
+      setAccountId(pickDefaultAccount(startMode));
       setToAccountId("");
       setNote("");
       setDate(new Date().toISOString().split("T")[0]);
@@ -118,14 +203,13 @@ export default function AddTransactionSheet({
     setSuccess(false);
     setConfirmDelete(false);
     setDeleting(false);
-  }, [open, editTransaction, defaultAccountId, accounts]);
+  }, [open, editTransaction, defaultAccountId, accounts]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Switching mode in CREATE clears mode-specific state.
-  // In EDIT, mode is locked (UI doesn't render the switcher).
+  /** Switching mode in CREATE clears mode-specific state and reapplies defaults. */
   function handleModeChange(newMode: Mode) {
     if (isEdit) return;
     setMode(newMode);
-    setCategory("");
+    setCategory(pickDefaultCategory(newMode));
     setToAccountId("");
   }
 
@@ -166,7 +250,6 @@ export default function AddTransactionSheet({
       const trimmedNote = parsed.data.note?.trim() || null;
 
       if (isEdit && editTransaction?.transfer_group_id) {
-        // ── Update both rows of the existing transfer group ──
         const groupId = editTransaction.transfer_group_id;
         const { data: pair, error: fetchErr } = await supabase
           .from("transactions")
@@ -222,7 +305,6 @@ export default function AddTransactionSheet({
           return;
         }
       } else {
-        // ── Create a new transfer pair ──
         const groupId = crypto.randomUUID();
         const { error: insertError } = await supabase
           .from("transactions")
@@ -259,8 +341,10 @@ export default function AddTransactionSheet({
           return;
         }
       }
+
+      // Smart-default memory: remember the source account for next time
+      lsSet(LS_LAST_ACCOUNT, parsed.data.from_account_id);
     } else {
-      // ── Income / Expense path (unchanged from before) ──
       const parsed = transactionSchema.safeParse({
         account_id: accountId,
         type: mode,
@@ -312,6 +396,10 @@ export default function AddTransactionSheet({
           return;
         }
       }
+
+      // Smart-default memory
+      lsSet(LS_LAST_ACCOUNT, parsed.data.account_id);
+      lsSet(lsLastCategory(mode), parsed.data.category);
     }
 
     setSuccess(true);
@@ -336,7 +424,6 @@ export default function AddTransactionSheet({
 
     let deleteError;
     if (editTransaction.transfer_group_id) {
-      // Delete BOTH rows of the transfer pair in one statement.
       const result = await supabase
         .from("transactions")
         .delete()
@@ -364,12 +451,41 @@ export default function AddTransactionSheet({
 
   const categoryList = mode === "income" ? INCOME_CATEGORIES : CATEGORIES;
   const isTransfer = mode === "transfer";
+  const theme = MODE_THEME[mode];
+  const numericAmount = parseFloat(amount) || 0;
+  const hasAmount = numericAmount > 0;
+
+  /* Required readiness flags for the CTA label & disabled state */
+  const fieldsReady = useMemo(() => {
+    if (!hasAmount) return false;
+    if (isTransfer) {
+      return !!accountId && !!toAccountId && accountId !== toAccountId;
+    }
+    return !!accountId && !!category;
+  }, [hasAmount, isTransfer, accountId, toAccountId, category]);
+
   const submitDisabled =
     saving ||
     success ||
     (isTransfer
       ? accounts.filter((a) => !a.archived_at).length < 2
-      : accounts.length === 0);
+      : accounts.length === 0) ||
+    !fieldsReady;
+
+  /* Submit label adapts to readiness for clearer affordance */
+  const submitLabel = (() => {
+    if (success) {
+      if (isEdit) return "Updated";
+      return isTransfer ? "Transferred" : "Added";
+    }
+    if (saving) return "Saving…";
+    if (!hasAmount) return "Enter amount";
+    if (isTransfer && (!accountId || !toAccountId)) return "Pick accounts";
+    if (!isTransfer && !accountId) return "Pick account";
+    if (!isTransfer && !category) return "Pick category";
+    if (isEdit) return isTransfer ? "Update transfer" : "Update transaction";
+    return isTransfer ? "Add transfer" : `Add ${mode}`;
+  })();
 
   return (
     <AnimatePresence>
@@ -396,19 +512,17 @@ export default function AddTransactionSheet({
             </div>
 
             <div className="px-5 pb-8 pt-2">
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-5">
                 <h2 className="text-lg font-bold text-brand-dark">
                   {isEdit
                     ? isTransfer
                       ? "Edit transfer"
                       : "Edit transaction"
-                    : isTransfer
-                    ? "New transfer"
                     : "New transaction"}
                 </h2>
                 <button
                   onClick={handleClose}
-                  className="p-2 -mr-2 rounded-xl text-brand-dark/30 hover:text-brand-dark/60 hover:bg-brand-dark/5 transition-colors"
+                  className="p-2 -mr-2 rounded-xl text-brand-dark/30 hover:text-brand-dark/60 hover:bg-brand-dark/5 transition-colors active:scale-95"
                 >
                   <X size={20} />
                 </button>
@@ -450,14 +564,14 @@ export default function AddTransactionSheet({
                     <button
                       onClick={() => setConfirmDelete(false)}
                       disabled={deleting}
-                      className="flex-1 py-3 rounded-2xl text-sm font-medium text-brand-dark bg-brand-dark/5 hover:bg-brand-dark/10 transition-colors"
+                      className="flex-1 py-3 rounded-2xl text-sm font-medium text-brand-dark bg-brand-dark/5 hover:bg-brand-dark/10 transition-colors active:scale-[0.98]"
                     >
                       Cancel
                     </button>
                     <button
                       onClick={handleDelete}
                       disabled={deleting}
-                      className="flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-semibold text-white bg-brand-accent hover:bg-brand-accent/90 transition-colors disabled:opacity-50"
+                      className="flex-1 flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-semibold text-white bg-brand-accent hover:bg-brand-accent/90 transition-colors active:scale-[0.98] disabled:opacity-50"
                     >
                       {deleting ? (
                         <Loader2 size={16} className="animate-spin" />
@@ -469,48 +583,55 @@ export default function AddTransactionSheet({
                   </div>
                 </div>
               ) : (
-                <form onSubmit={handleSubmit} className="space-y-5">
-                  {/* Mode switcher (3 tabs). Hidden in EDIT mode — type is locked. */}
+                <form onSubmit={handleSubmit} className="space-y-6">
+                  {/* ── Mode switcher (animated pill) — hidden in edit ── */}
                   {!isEdit && (
                     <div className="grid grid-cols-3 gap-1 p-1 bg-brand-dark/5 rounded-2xl">
-                      {(["expense", "income", "transfer"] as const).map((m) => {
-                        const isActive = mode === m;
-                        const activeColor =
-                          m === "income"
-                            ? "text-brand-green"
-                            : m === "transfer"
-                            ? "text-brand-dark"
-                            : "text-brand-dark";
+                      {MODES.map((m) => {
+                        const isActive = mode === m.value;
+                        const activeText = MODE_THEME[m.value].tabText;
                         return (
                           <button
-                            key={m}
+                            key={m.value}
                             type="button"
-                            onClick={() => handleModeChange(m)}
-                            className={`py-2.5 rounded-xl text-sm font-semibold transition-all capitalize ${
-                              isActive
-                                ? `bg-brand-beige ${activeColor} shadow-sm`
-                                : "text-brand-dark/40"
-                            }`}
+                            onClick={() => handleModeChange(m.value)}
+                            className="relative py-2.5 rounded-xl text-sm font-semibold transition-colors"
                           >
-                            {m}
+                            {isActive && (
+                              <motion.div
+                                layoutId="mode-active-bg"
+                                className="absolute inset-0 bg-brand-beige rounded-xl shadow-sm"
+                                transition={{
+                                  type: "spring",
+                                  stiffness: 500,
+                                  damping: 35,
+                                }}
+                              />
+                            )}
+                            <span
+                              className={`relative ${
+                                isActive ? activeText : "text-brand-dark/40"
+                              }`}
+                            >
+                              {m.label}
+                            </span>
                           </button>
                         );
                       })}
                     </div>
                   )}
 
-                  {/* Amount */}
-                  <div>
-                    <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
-                      Amount
-                    </label>
-                    <div className="relative">
+                  {/* ── Hero amount — large, centered, mode-colored ── */}
+                  <motion.div
+                    key={mode}
+                    initial={{ opacity: 0, scale: 0.96 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.2, ease: "easeOut" }}
+                    className="text-center pt-2 pb-1"
+                  >
+                    <div className="relative inline-flex items-baseline justify-center">
                       <span
-                        className={`absolute left-4 top-1/2 -translate-y-1/2 text-xl font-semibold ${
-                          mode === "income"
-                            ? "text-brand-green/60"
-                            : "text-brand-dark/30"
-                        }`}
+                        className={`text-3xl sm:text-4xl font-semibold mr-1 ${theme.amountPrefix}`}
                       >
                         $
                       </span>
@@ -519,136 +640,153 @@ export default function AddTransactionSheet({
                         autoFocus={!isEdit}
                         min="0.01"
                         step="0.01"
+                        inputMode="decimal"
                         value={amount}
                         onChange={(e) => setAmount(e.target.value)}
-                        placeholder="0.00"
-                        className={`w-full pl-9 pr-4 py-3.5 bg-white/60 border border-brand-dark/10 rounded-2xl text-2xl font-bold placeholder:text-brand-dark/15 focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors ${
-                          mode === "income"
-                            ? "text-brand-green"
-                            : "text-brand-dark"
-                        }`}
+                        placeholder="0"
+                        aria-label="Amount"
+                        className={`bg-transparent border-0 outline-none text-center text-5xl sm:text-6xl font-bold tracking-tight w-[6.5ch] tabular-nums placeholder:text-brand-dark/15 focus:placeholder:text-brand-dark/10 transition-colors ${theme.amountText}`}
                       />
                     </div>
-                  </div>
+                  </motion.div>
 
-                  {/* Category — hidden for transfers */}
-                  {!isTransfer && (
-                    <div>
-                      <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
-                        Category
-                      </label>
-                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                        {categoryList.map((cat) => {
-                          const isSelected = category === cat.value;
-                          const Icon = cat.icon;
-                          const expenseStyle =
-                            mode === "expense"
-                              ? getCategoryStyle(cat.value)
-                              : null;
-                          const iconColor = isSelected
-                            ? "text-brand-accent"
-                            : mode === "income"
-                            ? "text-brand-green/70"
-                            : expenseStyle?.iconColor ?? "text-brand-dark/50";
+                  {/* ── Progressive disclosure: rest of the form once amount > 0 ── */}
+                  <AnimatePresence>
+                    {hasAmount && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 12 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 12 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="space-y-5"
+                      >
+                        {/* Category — hidden for transfers */}
+                        {!isTransfer && (
+                          <div>
+                            <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
+                              Category
+                            </label>
+                            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                              {categoryList.map((cat) => {
+                                const isSelected = category === cat.value;
+                                const Icon = cat.icon;
+                                const expenseStyle =
+                                  mode === "expense"
+                                    ? getCategoryStyle(cat.value)
+                                    : null;
+                                const iconColor = isSelected
+                                  ? mode === "income"
+                                    ? "text-brand-green"
+                                    : "text-brand-accent"
+                                  : mode === "income"
+                                  ? "text-brand-green/60"
+                                  : expenseStyle?.iconColor ??
+                                    "text-brand-dark/50";
 
-                          return (
-                            <button
-                              key={cat.value}
-                              type="button"
-                              onClick={() => setCategory(cat.value)}
-                              className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl border text-center transition-all ${
-                                isSelected
-                                  ? "bg-brand-dark text-brand-beige border-brand-dark"
-                                  : "bg-white/60 text-brand-dark/60 border-brand-dark/5 hover:border-brand-dark/15"
-                              }`}
-                            >
-                              <Icon
-                                size={18}
-                                strokeWidth={1.6}
-                                className={iconColor}
-                              />
-                              <span className="text-[11px] font-medium leading-tight">
-                                {cat.label}
+                                return (
+                                  <button
+                                    key={cat.value}
+                                    type="button"
+                                    onClick={() => setCategory(cat.value)}
+                                    className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl border text-center transition-all active:scale-[0.97] ${
+                                      isSelected
+                                        ? "bg-brand-dark text-brand-beige border-brand-dark"
+                                        : "bg-white/60 text-brand-dark/60 border-brand-dark/5 hover:border-brand-dark/15"
+                                    }`}
+                                  >
+                                    <Icon
+                                      size={18}
+                                      strokeWidth={1.6}
+                                      className={iconColor}
+                                    />
+                                    <span className="text-[11px] font-medium leading-tight">
+                                      {cat.label}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Account picker(s) */}
+                        {!isTransfer ? (
+                          <AccountPicker
+                            label="Account"
+                            accounts={accounts}
+                            selectedId={accountId}
+                            onSelect={setAccountId}
+                          />
+                        ) : (
+                          <>
+                            <AccountPicker
+                              label="From"
+                              accounts={accounts.filter(
+                                (a) => !a.archived_at || a.id === accountId
+                              )}
+                              selectedId={accountId}
+                              onSelect={setAccountId}
+                              excludeId={toAccountId}
+                            />
+                            <AccountPicker
+                              label="To"
+                              accounts={accounts.filter(
+                                (a) => !a.archived_at || a.id === toAccountId
+                              )}
+                              selectedId={toAccountId}
+                              onSelect={setToAccountId}
+                              excludeId={accountId}
+                            />
+                          </>
+                        )}
+
+                        {/* Date + Note */}
+                        <div className="grid grid-cols-1 gap-4">
+                          <div>
+                            <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
+                              Date
+                            </label>
+                            <input
+                              type="date"
+                              value={date}
+                              onChange={(e) => setDate(e.target.value)}
+                              className="w-full px-4 py-3 bg-white/60 border border-brand-dark/10 rounded-2xl text-sm text-brand-dark focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
+                              Note{" "}
+                              <span className="text-brand-dark/20">
+                                (optional)
                               </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                            </label>
+                            <input
+                              type="text"
+                              value={note}
+                              onChange={(e) => setNote(e.target.value)}
+                              placeholder={
+                                isTransfer
+                                  ? "Why are you moving this?"
+                                  : "What was this for?"
+                              }
+                              maxLength={200}
+                              className="w-full px-4 py-3 bg-white/60 border border-brand-dark/10 rounded-2xl text-sm text-brand-dark placeholder:text-brand-dark/25 focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors"
+                            />
+                          </div>
+                        </div>
 
-                  {/* Account picker(s). One for income/expense, two (From/To) for transfer. */}
-                  {!isTransfer ? (
-                    <AccountPicker
-                      label="Account"
-                      accounts={accounts}
-                      selectedId={accountId}
-                      onSelect={setAccountId}
-                    />
-                  ) : (
-                    <>
-                      <AccountPicker
-                        label="From"
-                        accounts={accounts.filter(
-                          (a) => !a.archived_at || a.id === accountId
-                        )}
-                        selectedId={accountId}
-                        onSelect={setAccountId}
-                        excludeId={toAccountId}
-                      />
-                      <AccountPicker
-                        label="To"
-                        accounts={accounts.filter(
-                          (a) => !a.archived_at || a.id === toAccountId
-                        )}
-                        selectedId={toAccountId}
-                        onSelect={setToAccountId}
-                        excludeId={accountId}
-                      />
-                    </>
-                  )}
-
-                  {/* Date */}
-                  <div>
-                    <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
-                      Date
-                    </label>
-                    <input
-                      type="date"
-                      value={date}
-                      onChange={(e) => setDate(e.target.value)}
-                      className="w-full px-4 py-3 bg-white/60 border border-brand-dark/10 rounded-2xl text-sm text-brand-dark focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors"
-                    />
-                  </div>
-
-                  {/* Note */}
-                  <div>
-                    <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
-                      Note{" "}
-                      <span className="text-brand-dark/20">(optional)</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={note}
-                      onChange={(e) => setNote(e.target.value)}
-                      placeholder={
-                        isTransfer
-                          ? "Why are you moving this?"
-                          : "What was this for?"
-                      }
-                      maxLength={200}
-                      className="w-full px-4 py-3 bg-white/60 border border-brand-dark/10 rounded-2xl text-sm text-brand-dark placeholder:text-brand-dark/25 focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors"
-                    />
-                  </div>
-
-                  {/* Hint when fewer than 2 accounts and we're in transfer mode */}
-                  {isTransfer &&
-                    accounts.filter((a) => !a.archived_at).length < 2 && (
-                      <div className="bg-brand-dark/[0.04] text-brand-dark/50 text-xs px-4 py-3 rounded-xl leading-relaxed">
-                        You need at least two active accounts to transfer.
-                        Create another account first.
-                      </div>
+                        {/* Hint when fewer than 2 active accounts in transfer mode */}
+                        {isTransfer &&
+                          accounts.filter((a) => !a.archived_at).length <
+                            2 && (
+                            <div className="bg-brand-dark/[0.04] text-brand-dark/50 text-xs px-4 py-3 rounded-xl leading-relaxed">
+                              You need at least two active accounts to transfer.
+                              Create another account first.
+                            </div>
+                          )}
+                      </motion.div>
                     )}
+                  </AnimatePresence>
 
                   {error && (
                     <div className="bg-brand-accent/10 text-brand-accent text-sm px-4 py-3 rounded-xl">
@@ -656,39 +794,37 @@ export default function AddTransactionSheet({
                     </div>
                   )}
 
-                  <button
+                  {/* ── CTA — color adapts to mode, label reflects readiness ── */}
+                  <motion.button
                     type="submit"
                     disabled={submitDisabled}
-                    className={`w-full flex items-center justify-center gap-2 font-semibold py-3.5 rounded-2xl transition-all text-sm active:scale-[0.98] disabled:cursor-not-allowed ${
+                    whileTap={{ scale: submitDisabled ? 1 : 0.97 }}
+                    className={`w-full flex items-center justify-center gap-2 font-semibold py-3.5 rounded-2xl transition-all text-sm disabled:cursor-not-allowed text-white ${
                       success
-                        ? "bg-brand-green text-brand-beige"
-                        : "bg-brand-accent text-white hover:bg-brand-accent/90 disabled:opacity-50"
+                        ? `${theme.ctaSuccess} text-brand-beige`
+                        : `${theme.cta} ${theme.ctaHover} disabled:opacity-40`
                     }`}
                   >
                     {success ? (
                       <>
                         <Check size={18} strokeWidth={2.5} />
-                        {isEdit ? "Updated" : isTransfer ? "Transferred" : "Added"}
+                        {submitLabel}
                       </>
                     ) : saving ? (
                       <>
                         <Loader2 size={16} className="animate-spin" />
-                        Saving…
+                        {submitLabel}
                       </>
-                    ) : isEdit ? (
-                      isTransfer ? "Update transfer" : "Update transaction"
-                    ) : isTransfer ? (
-                      "Add transfer"
                     ) : (
-                      `Add ${mode}`
+                      submitLabel
                     )}
-                  </button>
+                  </motion.button>
 
                   {isEdit && (
                     <button
                       type="button"
                       onClick={() => setConfirmDelete(true)}
-                      className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-medium text-brand-accent/60 hover:text-brand-accent hover:bg-brand-accent/5 transition-colors"
+                      className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-medium text-brand-accent/60 hover:text-brand-accent hover:bg-brand-accent/5 transition-colors active:scale-[0.98]"
                     >
                       <Trash2 size={14} />
                       Delete this {isTransfer ? "transfer" : "transaction"}
@@ -706,14 +842,13 @@ export default function AddTransactionSheet({
   );
 }
 
-/* ── Reusable account picker (one or two of these per form) ── */
+/* ── Reusable account picker ── */
 
 interface AccountPickerProps {
   label: string;
   accounts: Account[];
   selectedId: string;
   onSelect: (id: string) => void;
-  /** Hide this id from the list (used to prevent picking same account on both sides of a transfer) */
   excludeId?: string;
 }
 
@@ -747,7 +882,7 @@ function AccountPicker({
                 key={a.id}
                 type="button"
                 onClick={() => onSelect(a.id)}
-                className={`flex items-center gap-3 px-4 py-3 rounded-2xl border transition-all text-left ${
+                className={`flex items-center gap-3 px-4 py-3 rounded-2xl border transition-all text-left active:scale-[0.99] ${
                   isSelected
                     ? "bg-brand-dark text-brand-beige border-brand-dark"
                     : "bg-white/60 text-brand-dark border-brand-dark/10 hover:border-brand-dark/20"
@@ -791,4 +926,3 @@ function AccountPicker({
     </div>
   );
 }
-

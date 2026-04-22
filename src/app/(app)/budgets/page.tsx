@@ -9,6 +9,7 @@ import { getCategoryByValue } from "@/lib/constants";
 import BudgetSheet from "@/components/budget-sheet";
 import TemplatePicker from "@/components/template-picker";
 import MonthSelector from "@/components/month-selector";
+import { Money } from "@/components/money";
 import { monthStart, isCurrentMonth, formatMonth } from "@/lib/months";
 import type { Budget, Transaction } from "@/types/database";
 
@@ -105,8 +106,10 @@ export default function BudgetsPage() {
           <div>
             <p className="text-brand-beige/40 text-xs font-semibold uppercase tracking-wider">Total monthly budget</p>
             <div className="flex items-end gap-3 mt-2">
-              <p className="text-4xl font-bold text-brand-beige tracking-tight">${totalLimit.toLocaleString()}</p>
-              <p className="text-brand-beige/30 text-sm pb-1">${totalSpent.toFixed(0)} spent · ${(totalLimit - totalSpent).toFixed(0)} left</p>
+              <Money value={totalLimit} short className="text-4xl font-bold text-brand-beige tracking-tight" />
+              <p className="text-brand-beige/30 text-sm pb-1">
+                <Money value={totalSpent} short /> spent · <Money value={totalLimit - totalSpent} short /> left
+              </p>
             </div>
           </div>
           {isCurrent && (
@@ -138,12 +141,12 @@ export default function BudgetsPage() {
                   <p className="text-sm font-semibold text-brand-dark">{catDef?.label || cat.category}</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <p className="text-sm text-brand-dark/40"><span className={`font-bold ${isOver ? "text-brand-accent" : "text-brand-dark"}`}>${spent.toFixed(0)}</span>{" / "}${limit}</p>
+                  <p className="text-sm text-brand-dark/40"><Money value={spent} short className={`font-bold ${isOver ? "text-brand-accent" : "text-brand-dark"}`} />{" / "}<Money value={limit} short /></p>
                   {isCurrent && <button onClick={() => openEditBudget(cat.category, limit)} className="p-1.5 rounded-lg text-brand-dark/20 hover:text-brand-dark/50 hover:bg-brand-dark/5 transition-colors" aria-label={`Edit ${catDef?.label || cat.category} budget`}><Pencil size={14} /></button>}
                 </div>
               </div>
               <div className="w-full h-2 bg-brand-dark/5 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all ${isOver ? "bg-brand-accent" : "bg-brand-green"}`} style={{ width: `${p}%` }} /></div>
-              <p className="text-[11px] text-brand-dark/30 mt-2">{isOver ? "Budget reached" : `$${(limit - spent).toFixed(0)} remaining`}</p>
+              <p className="text-[11px] text-brand-dark/30 mt-2">{isOver ? "Budget reached" : <><Money value={limit - spent} short /> remaining</>}</p>
             </motion.div>
           );
         })}

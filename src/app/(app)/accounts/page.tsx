@@ -11,6 +11,7 @@ import {
   type BalanceTx,
 } from "@/lib/account-balance";
 import AddAccountSheet from "@/components/add-account-sheet";
+import { Money } from "@/components/money";
 import type { Account, AccountWithBalance } from "@/types/database";
 
 const fadeUp = {
@@ -142,13 +143,12 @@ export default function AccountsPage() {
             <p className="text-brand-beige/40 text-xs font-semibold uppercase tracking-wider">
               Total balance
             </p>
-            <p
-              className={`text-4xl font-bold mt-2 tracking-tight ${
+            <Money
+              value={totalBalance}
+              className={`text-4xl font-bold mt-2 tracking-tight block ${
                 totalBalance < 0 ? "text-brand-accent" : "text-brand-beige"
               }`}
-            >
-              {totalBalance < 0 ? "-" : ""}${formatMoney(totalBalance)}
-            </p>
+            />
             <p className="text-brand-beige/30 text-sm mt-1">
               across {accounts.length} account{accounts.length !== 1 ? "s" : ""}
             </p>
@@ -203,13 +203,12 @@ export default function AccountsPage() {
                 </div>
                 <Pencil size={14} className="text-brand-dark/20 shrink-0 mt-1" />
               </div>
-              <p
-                className={`text-2xl font-bold mt-4 tracking-tight ${
+              <Money
+                value={a.current_balance}
+                className={`text-2xl font-bold mt-4 tracking-tight block ${
                   isNegative ? "text-brand-accent" : "text-brand-dark"
                 }`}
-              >
-                {isNegative ? "-" : ""}${formatMoney(a.current_balance)}
-              </p>
+              />
               <p className="text-[11px] text-brand-dark/30 mt-1">
                 {a.currency}
               </p>

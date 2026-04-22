@@ -20,6 +20,7 @@ import {
   computeAccountBalances,
   type BalanceTx,
 } from "@/lib/account-balance";
+import { Money } from "@/components/money";
 import type { Transaction, Budget, RecurringExpense, Account } from "@/types/database";
 
 function formatMoney(n: number): string {
@@ -163,9 +164,17 @@ export default function DashboardPage() {
         <div className="flex items-start justify-between">
           <div>
             <p className="text-brand-beige/40 text-xs font-semibold uppercase tracking-wider">{isCurrent ? "Left to spend" : "Month summary"}</p>
-            <p className="text-5xl sm:text-6xl font-bold text-brand-beige mt-2 tracking-tight">{totalBudget > 0 ? `$${remaining.toLocaleString()}` : `$${totalSpent.toLocaleString()}`}</p>
+            <Money
+              value={totalBudget > 0 ? remaining : totalSpent}
+              short
+              className="text-5xl sm:text-6xl font-bold text-brand-beige mt-2 tracking-tight block"
+            />
             <p className="text-brand-beige/30 text-sm mt-2">
-              {totalBudget > 0 ? `of $${totalBudget.toLocaleString()}` : `total spent`}
+              {totalBudget > 0 ? (
+                <>of <Money value={totalBudget} short /></>
+              ) : (
+                "total spent"
+              )}
               {isCurrent && ` · ${daysLeft} days left`}
             </p>
           </div>
@@ -177,7 +186,7 @@ export default function DashboardPage() {
             )}
             <div className="text-right mt-2 hidden sm:block">
               <p className="text-brand-beige/40 text-xs">Spent</p>
-              <p className="text-brand-beige text-lg font-bold">${totalSpent.toLocaleString()}</p>
+              <Money value={totalSpent} short className="text-brand-beige text-lg font-bold block" />
             </div>
           </div>
         </div>
@@ -189,7 +198,7 @@ export default function DashboardPage() {
             </div>
             <div className="flex justify-between mt-2">
               <span className="text-[11px] text-brand-beige/30">{spentPct}% spent</span>
-              <span className="text-[11px] text-brand-beige/30">${totalBudget.toLocaleString()}</span>
+              <Money value={totalBudget} short className="text-[11px] text-brand-beige/30" />
             </div>
           </div>
         )}
@@ -215,13 +224,12 @@ export default function DashboardPage() {
                   All time
                 </span>
               </div>
-              <p
-                className={`text-3xl font-bold tracking-tight mt-2 ${
+              <Money
+                value={totalAccountBalance}
+                className={`text-3xl font-bold tracking-tight mt-2 block ${
                   totalAccountBalance < 0 ? "text-brand-accent" : "text-brand-dark"
                 }`}
-              >
-                {totalAccountBalance < 0 ? "-" : ""}${formatMoney(totalAccountBalance)}
-              </p>
+              />
               <p className="text-xs text-brand-dark/30 mt-1">
                 across {accounts.length} account{accounts.length !== 1 ? "s" : ""}
               </p>
@@ -263,13 +271,12 @@ export default function DashboardPage() {
                       </p>
                     </div>
                   </div>
-                  <p
+                  <Money
+                    value={a.current_balance}
                     className={`text-sm font-bold whitespace-nowrap ml-3 ${
                       isNegative ? "text-brand-accent" : "text-brand-dark"
                     }`}
-                  >
-                    {isNegative ? "-" : ""}${formatMoney(a.current_balance)}
-                  </p>
+                  />
                 </div>
               );
             })}
@@ -398,7 +405,7 @@ export default function DashboardPage() {
                     <p className="text-sm font-medium text-brand-dark">{bill.name}</p>
                     <p className="text-xs text-brand-dark/30 mt-0.5">Due on the {bill.due_day}{bill.due_day === 1 ? "st" : bill.due_day === 2 ? "nd" : bill.due_day === 3 ? "rd" : "th"}</p>
                   </div>
-                  <p className="text-sm font-semibold text-brand-dark">${Number(bill.amount).toFixed(2)}</p>
+                  <Money value={Number(bill.amount)} className="text-sm font-semibold text-brand-dark" />
                 </div>
               ))}
             </div>
@@ -428,7 +435,7 @@ export default function DashboardPage() {
                       <p className="text-xs text-brand-dark/30">{exp.date}</p>
                     </div>
                   </div>
-                  <p className="text-sm font-semibold text-brand-dark">${Number(exp.amount).toFixed(2)}</p>
+                  <Money value={Number(exp.amount)} className="text-sm font-semibold text-brand-dark" />
                 </div>
               );
             })}

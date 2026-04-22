@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
+import { useBalanceVisibility } from "@/components/balance-visibility-provider";
 import {
   LayoutDashboard,
   ArrowLeftRight,
@@ -12,6 +13,8 @@ import {
   Lightbulb,
   BookOpen,
   Settings,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 const navItems = [
@@ -28,20 +31,29 @@ const navItems = [
 export default function SidebarNav() {
   const pathname = usePathname();
   const { user, profile } = useAuth();
+  const { hidden, toggle } = useBalanceVisibility();
 
   const displayName = profile?.full_name || user?.email?.split("@")[0] || "Student";
   const initials = displayName.slice(0, 2).toUpperCase();
 
   return (
     <aside className="hidden md:flex md:flex-col md:w-60 bg-brand-dark fixed inset-y-0 left-0 z-30">
-      {/* Logo */}
-      <div className="px-6 py-6">
+      {/* Logo + visibility toggle */}
+      <div className="px-6 py-6 flex items-center justify-between">
         <Link
           href="/dashboard"
           className="text-xl font-bold tracking-tight text-brand-beige"
         >
           moniz<span className="text-brand-accent">.</span>
         </Link>
+        <button
+          type="button"
+          onClick={toggle}
+          className="p-1.5 rounded-lg text-brand-beige/40 hover:text-brand-beige hover:bg-brand-beige/5 transition-colors active:scale-95"
+          aria-label={hidden ? "Show balances" : "Hide balances"}
+        >
+          {hidden ? <EyeOff size={16} /> : <Eye size={16} />}
+        </button>
       </div>
 
       {/* Nav links */}

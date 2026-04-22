@@ -9,6 +9,7 @@ import { getCategoryByValue } from "@/lib/constants";
 import { monthStart } from "@/lib/months";
 import { useAutoPostRecurring } from "@/lib/use-auto-post-recurring";
 import RecurringSheet from "@/components/recurring-sheet";
+import { Money } from "@/components/money";
 import type { RecurringExpense } from "@/types/database";
 
 const fadeUp = {
@@ -171,9 +172,10 @@ export default function RecurringPage() {
             <p className="text-brand-beige/40 text-xs font-semibold uppercase tracking-wider">
               Monthly recurring
             </p>
-            <p className="text-3xl font-bold text-brand-beige mt-2 tracking-tight">
-              ${totalMonthly.toFixed(2)}
-            </p>
+            <Money
+              value={totalMonthly}
+              className="text-3xl font-bold text-brand-beige mt-2 tracking-tight block"
+            />
             <p className="text-brand-beige/30 text-sm mt-1">
               {active.length} active
               {paused.length > 0 && ` · ${paused.length} paused`}
@@ -242,9 +244,10 @@ export default function RecurringPage() {
                     </div>
                   </button>
                   <div className="flex items-center gap-3 shrink-0">
-                    <p className="text-sm font-bold text-brand-dark">
-                      ${Number(item.amount).toFixed(2)}
-                    </p>
+                    <Money
+                      value={Number(item.amount)}
+                      className="text-sm font-bold text-brand-dark"
+                    />
                     <button
                       onClick={() => toggleActive(item)}
                       className="p-1.5 rounded-lg text-brand-dark/20 hover:text-brand-dark/50 hover:bg-brand-dark/5 transition-colors"

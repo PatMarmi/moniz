@@ -13,6 +13,7 @@ import MonthSelector from "@/components/month-selector";
 import { monthStart, formatMonth } from "@/lib/months";
 import { useAutoPostRecurring } from "@/lib/use-auto-post-recurring";
 import AddTransactionSheet from "@/components/add-transaction-sheet";
+import { Money } from "@/components/money";
 import type { Account, Transaction } from "@/types/database";
 
 const fadeUp = {
@@ -248,18 +249,17 @@ export default function TransactionsPage() {
           <p className="text-xs text-brand-dark/40 font-medium uppercase tracking-wider">
             Net this month
           </p>
-          <p
-            className={`text-3xl font-bold mt-1 tracking-tight ${
+          <Money
+            value={net}
+            showSign
+            className={`text-3xl font-bold mt-1 tracking-tight block ${
               net >= 0 ? "text-brand-dark" : "text-brand-accent"
             }`}
-          >
-            {net >= 0 ? "+" : "-"}${Math.abs(net).toFixed(2)}
-          </p>
+          />
           <p className="text-xs text-brand-dark/30 mt-1">
-            <span className="text-brand-green font-medium">
-              +${totalIncome.toFixed(2)}
-            </span>{" "}
-            · <span>-${totalExpense.toFixed(2)}</span>
+            <Money value={totalIncome} showSign className="text-brand-green font-medium" />
+            {" · "}
+            <Money value={-totalExpense} className="" />
           </p>
         </div>
         <button
@@ -298,10 +298,11 @@ export default function TransactionsPage() {
                 <p className="text-xs text-brand-dark/30 uppercase tracking-wider font-semibold">
                   {formatDayHeader(d)}
                 </p>
-                <p className="text-xs font-semibold text-brand-dark/40">
-                  {dayTotal > 0 ? "+" : dayTotal < 0 ? "-" : ""}$
-                  {Math.abs(dayTotal).toFixed(2)}
-                </p>
+                <Money
+                  value={dayTotal}
+                  showSign
+                  className="text-xs font-semibold text-brand-dark/40"
+                />
               </div>
               <div className="bg-white/60 backdrop-blur-sm rounded-2xl border border-brand-dark/5 overflow-hidden">
                 <div className="divide-y divide-brand-dark/5">
@@ -347,9 +348,10 @@ export default function TransactionsPage() {
                               </p>
                             </div>
                           </div>
-                          <p className="text-sm font-bold whitespace-nowrap ml-3 text-brand-dark/60">
-                            ${Number(t.amount).toFixed(2)}
-                          </p>
+                          <Money
+                            value={Number(t.amount)}
+                            className="text-base font-bold whitespace-nowrap ml-3 text-brand-dark/60 tabular-nums"
+                          />
                         </button>
                       );
                     }
@@ -396,13 +398,13 @@ export default function TransactionsPage() {
                             </p>
                           </div>
                         </div>
-                        <p
-                          className={`text-sm font-bold whitespace-nowrap ml-3 ${
+                        <Money
+                          value={isIncome ? Number(t.amount) : -Number(t.amount)}
+                          showSign
+                          className={`text-base font-bold whitespace-nowrap ml-3 tabular-nums ${
                             isIncome ? "text-brand-green" : "text-brand-dark"
                           }`}
-                        >
-                          {isIncome ? "+" : "-"}${Number(t.amount).toFixed(2)}
-                        </p>
+                        />
                       </button>
                     );
                   })}
