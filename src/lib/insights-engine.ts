@@ -1,5 +1,5 @@
 import { getCategoryByValue } from "@/lib/constants";
-import type { Expense, Budget, RecurringExpense } from "@/types/database";
+import type { Transaction, Budget, RecurringExpense } from "@/types/database";
 
 export type InsightType = "info" | "warning" | "positive";
 export type InsightSection = "overview" | "budgets" | "patterns" | "recurring" | "comparison";
@@ -22,11 +22,19 @@ function pct(part: number, whole: number): number {
   return whole > 0 ? Math.round((part / whole) * 100) : 0;
 }
 
+/**
+ * Generate insights from a user's data for a given month.
+ *
+ * `expenses` and `prevExpenses` are now Transaction[] filtered to type='expense'
+ * by the caller. The engine reads only `.amount`, `.category`, and `.note` on
+ * each row — properties that exist on both legacy Expense and Transaction.
+ * Variable names are kept as `expenses` for readability of the insight rules.
+ */
 export function generateInsights(
-  expenses: Expense[],
+  expenses: Transaction[],
   budgets: Budget[],
   recurring: RecurringExpense[],
-  prevExpenses?: Expense[],
+  prevExpenses?: Transaction[],
   prevBudgets?: Budget[]
 ): GeneratedInsight[] {
   const insights: GeneratedInsight[] = [];

@@ -10,7 +10,7 @@ import BudgetSheet from "@/components/budget-sheet";
 import TemplatePicker from "@/components/template-picker";
 import MonthSelector from "@/components/month-selector";
 import { monthStart, isCurrentMonth, formatMonth } from "@/lib/months";
-import type { Budget, Expense } from "@/types/database";
+import type { Budget, Transaction } from "@/types/database";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -27,7 +27,8 @@ export default function BudgetsPage() {
   const { user, profile } = useAuth();
   const [month, setMonth] = useState(() => monthStart());
   const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  // After Phase 4B: expenses are transactions filtered to type='expense'
+  const [expenses, setExpenses] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -44,7 +45,8 @@ export default function BudgetsPage() {
     const supabase = createClient();
     Promise.all([
       supabase.from("budgets").select("*").eq("user_id", user.id).eq("month", month),
-      supabase.from("expenses").select("*").eq("user_id", user.id).eq("month", month),
+      // Phase 4B cutover: spent calc reads transactions of type='expense'
+      supabase.from("transactions").select("*").eq("user_id", user.id).eq("type", "expense").eq("month", month),
     ]).then(([budRes, expRes]) => {
       setBudgets(budRes.data ?? []);
       setExpenses(expRes.data ?? []);

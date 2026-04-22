@@ -12,10 +12,24 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { createClient } from "@/lib/supabase/client";
-import { getCategoryByValue } from "@/lib/constants";
+import { getCategoryByValue, getAccountTypeByValue } from "@/lib/constants";
 import MonthSelector from "@/components/month-selector";
 import { monthStart, isCurrentMonth, daysLeftIn, prevMonthStart, formatMonth } from "@/lib/months";
-import type { Expense, Budget, RecurringExpense } from "@/types/database";
+import type { Transaction, Budget, RecurringExpense, Account } from "@/types/database";
+
+/** Minimal transaction fields needed to compute balances */
+interface BalanceTx {
+  account_id: string;
+  type: "income" | "expense";
+  amount: number;
+}
+
+function formatMoney(n: number): string {
+  return Math.abs(n).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -31,10 +45,14 @@ const vp = { once: true, margin: "-40px" as const };
 export default function DashboardPage() {
   const { user } = useAuth();
   const [month, setMonth] = useState(() => monthStart());
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  // After Phase 4B: expenses are transactions filtered to type='expense'
+  const [expenses, setExpenses] = useState<Transaction[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [recurring, setRecurring] = useState<RecurringExpense[]>([]);
-  const [prevExpenses, setPrevExpenses] = useState<Expense[]>([]);
+  const [prevExpenses, setPrevExpenses] = useState<Transaction[]>([]);
+  // Accounts + all-time transaction deltas (NOT filtered by month)
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [allTxns, setAllTxns] = useState<BalanceTx[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(() => {
@@ -45,15 +63,30 @@ export default function DashboardPage() {
     const prevMonth = prevMonthStart(month);
 
     Promise.all([
-      supabase.from("expenses").select("*").eq("user_id", user.id).eq("month", month).order("date", { ascending: false }),
+      // Phase 4B cutover: read expenses from transactions (type='expense')
+      supabase.from("transactions").select("*").eq("user_id", user.id).eq("type", "expense").eq("month", month).order("date", { ascending: false }),
       supabase.from("budgets").select("*").eq("user_id", user.id).eq("month", month),
       supabase.from("recurring_expenses").select("*").eq("user_id", user.id).eq("is_active", true),
-      supabase.from("expenses").select("*").eq("user_id", user.id).eq("month", prevMonth),
-    ]).then(([expRes, budRes, recRes, prevExpRes]) => {
+      supabase.from("transactions").select("*").eq("user_id", user.id).eq("type", "expense").eq("month", prevMonth),
+      // Accounts + all transactions — NOT filtered by selected month.
+      // Balances represent all-time totals (starting_balance + every income/expense ever).
+      supabase
+        .from("accounts")
+        .select("*")
+        .eq("user_id", user.id)
+        .is("archived_at", null)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("transactions")
+        .select("account_id, type, amount")
+        .eq("user_id", user.id),
+    ]).then(([expRes, budRes, recRes, prevExpRes, accRes, txRes]) => {
       setExpenses(expRes.data ?? []);
       setBudgets(budRes.data ?? []);
       setRecurring(recRes.data ?? []);
       setPrevExpenses(prevExpRes.data ?? []);
+      setAccounts(accRes.data ?? []);
+      setAllTxns((txRes.data as BalanceTx[] | null) ?? []);
       setLoading(false);
     });
   }, [user, month]);
@@ -88,6 +121,22 @@ export default function DashboardPage() {
   const spentDiff = totalSpent - prevTotalSpent;
   const hasPrevData = prevExpenses.length > 0;
 
+  // ── Account balances (all-time, NOT filtered by selected month) ──
+  const accountDeltas: Record<string, number> = {};
+  for (const tx of allTxns) {
+    const delta = tx.type === "income" ? Number(tx.amount) : -Number(tx.amount);
+    accountDeltas[tx.account_id] = (accountDeltas[tx.account_id] || 0) + delta;
+  }
+  const accountsWithBalance = accounts.map((a) => ({
+    ...a,
+    current_balance: Number(a.starting_balance) + (accountDeltas[a.id] || 0),
+  }));
+  const totalAccountBalance = accountsWithBalance.reduce(
+    (s, a) => s + a.current_balance,
+    0
+  );
+  const hasAccounts = accounts.length > 0;
+
   // Empty state
   if (!loading && !hasData) {
     return (
@@ -99,7 +148,7 @@ export default function DashboardPage() {
           <p className="text-sm text-brand-beige/40 mt-2 max-w-sm mx-auto leading-relaxed">{isCurrent ? "Start by adding your first expense or setting up your monthly budget." : "No expenses or budgets were recorded this month."}</p>
           {isCurrent && (
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mt-8">
-              <a href="/expenses" className="flex items-center gap-2 bg-brand-accent text-white font-semibold px-6 py-3 rounded-full hover:bg-brand-accent/90 transition-colors text-sm"><Plus size={16} />Add first expense</a>
+              <a href="/transactions" className="flex items-center gap-2 bg-brand-accent text-white font-semibold px-6 py-3 rounded-full hover:bg-brand-accent/90 transition-colors text-sm"><Plus size={16} />Add first transaction</a>
               <a href="/budgets" className="flex items-center gap-2 bg-brand-beige/10 text-brand-beige font-medium px-6 py-3 rounded-full hover:bg-brand-beige/15 transition-colors text-sm">Set up budget</a>
             </div>
           )}
@@ -149,6 +198,120 @@ export default function DashboardPage() {
           </div>
         )}
       </motion.div>
+
+      {/* Accounts card — ALL-TIME balances, not affected by month selector */}
+      {hasAccounts ? (
+        <motion.div
+          initial="hidden"
+          whileInView="visible"
+          viewport={vp}
+          variants={fadeUp}
+          custom={0}
+          className="bg-white/60 backdrop-blur-sm rounded-2xl border border-brand-dark/5 overflow-hidden"
+        >
+          <div className="px-5 pt-5 pb-4 flex items-start justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] font-bold text-brand-dark/40 uppercase tracking-wider">
+                  Accounts
+                </p>
+                <span className="text-[10px] font-medium text-brand-dark/30 bg-brand-dark/[0.04] px-2 py-0.5 rounded-full">
+                  All time
+                </span>
+              </div>
+              <p
+                className={`text-3xl font-bold tracking-tight mt-2 ${
+                  totalAccountBalance < 0 ? "text-brand-accent" : "text-brand-dark"
+                }`}
+              >
+                {totalAccountBalance < 0 ? "-" : ""}${formatMoney(totalAccountBalance)}
+              </p>
+              <p className="text-xs text-brand-dark/30 mt-1">
+                across {accounts.length} account{accounts.length !== 1 ? "s" : ""}
+              </p>
+            </div>
+            <a
+              href="/accounts"
+              className="text-xs font-medium text-brand-accent flex items-center gap-0.5 hover:underline shrink-0"
+            >
+              View all <ArrowUpRight size={12} />
+            </a>
+          </div>
+
+          <div className="divide-y divide-brand-dark/5 border-t border-brand-dark/5">
+            {accountsWithBalance.map((a) => {
+              const typeDef = getAccountTypeByValue(a.type);
+              const Icon = typeDef?.icon;
+              const isNegative = a.current_balance < 0;
+              return (
+                <div
+                  key={a.id}
+                  className="flex items-center justify-between px-5 py-3"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {Icon && (
+                      <div className="w-8 h-8 rounded-lg bg-brand-dark/5 flex items-center justify-center shrink-0">
+                        <Icon
+                          size={15}
+                          strokeWidth={1.7}
+                          className="text-brand-dark/50"
+                        />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-brand-dark truncate">
+                        {a.name}
+                      </p>
+                      <p className="text-[11px] text-brand-dark/30 uppercase tracking-wider">
+                        {typeDef?.label || a.type}
+                      </p>
+                    </div>
+                  </div>
+                  <p
+                    className={`text-sm font-bold whitespace-nowrap ml-3 ${
+                      isNegative ? "text-brand-accent" : "text-brand-dark"
+                    }`}
+                  >
+                    {isNegative ? "-" : ""}${formatMoney(a.current_balance)}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </motion.div>
+      ) : (
+        <motion.div
+          initial="hidden"
+          whileInView="visible"
+          viewport={vp}
+          variants={fadeUp}
+          custom={0}
+          className="bg-white/60 backdrop-blur-sm rounded-2xl border border-brand-dark/5 p-5"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-brand-dark/5 flex items-center justify-center shrink-0">
+                <Wallet size={18} strokeWidth={1.6} className="text-brand-dark/40" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-brand-dark">
+                  Track real account balances
+                </p>
+                <p className="text-xs text-brand-dark/40 mt-0.5 leading-relaxed">
+                  Add your accounts to see your all-time balance and log
+                  transactions that update it automatically.
+                </p>
+              </div>
+            </div>
+            <a
+              href="/accounts"
+              className="shrink-0 bg-brand-accent text-white text-xs font-semibold px-4 py-2 rounded-full hover:bg-brand-accent/90 transition-colors"
+            >
+              Set up
+            </a>
+          </div>
+        </motion.div>
+      )}
 
       {/* Stats row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -251,7 +414,7 @@ export default function DashboardPage() {
       <motion.div initial="hidden" whileInView="visible" viewport={vp} variants={fadeUp} custom={0} className="bg-white/60 backdrop-blur-sm rounded-2xl border border-brand-dark/5 overflow-hidden">
         <div className="flex items-center justify-between px-5 pt-5 pb-3">
           <h2 className="text-sm font-bold text-brand-dark">Recent expenses</h2>
-          <a href="/expenses" className="text-xs font-medium text-brand-accent flex items-center gap-0.5 hover:underline">View all <ArrowUpRight size={12} /></a>
+          <a href="/transactions" className="text-xs font-medium text-brand-accent flex items-center gap-0.5 hover:underline">View all <ArrowUpRight size={12} /></a>
         </div>
         {recentExpenses.length === 0 ? (
           <p className="text-sm text-brand-dark/30 px-5 pb-5">No expenses this month.</p>

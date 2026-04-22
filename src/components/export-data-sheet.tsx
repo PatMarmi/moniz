@@ -39,39 +39,66 @@ export default function ExportDataSheet({
     try {
       const supabase = createClient();
 
-      const [profileRes, expensesRes, budgetsRes, recurringRes] =
-        await Promise.all([
-          supabase
-            .from("user_profiles")
-            .select("*")
-            .eq("id", userId)
-            .single(),
-          supabase
-            .from("expenses")
-            .select("*")
-            .eq("user_id", userId)
-            .order("date", { ascending: false }),
-          supabase
-            .from("budgets")
-            .select("*")
-            .eq("user_id", userId)
-            .order("month", { ascending: false }),
-          supabase
-            .from("recurring_expenses")
-            .select("*")
-            .eq("user_id", userId),
-        ]);
+      // Phase 4B cutover: export is now centered on accounts + transactions.
+      // The legacy `expenses` key is dropped — all that data now lives in
+      // `transactions` (migrated rows have a non-null migrated_from_expense_id).
+      const [
+        profileRes,
+        accountsRes,
+        transactionsRes,
+        budgetsRes,
+        recurringRes,
+      ] = await Promise.all([
+        supabase
+          .from("user_profiles")
+          .select("*")
+          .eq("id", userId)
+          .single(),
+        supabase
+          .from("accounts")
+          .select("*")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("transactions")
+          .select("*")
+          .eq("user_id", userId)
+          .order("date", { ascending: false }),
+        supabase
+          .from("budgets")
+          .select("*")
+          .eq("user_id", userId)
+          .order("month", { ascending: false }),
+        supabase
+          .from("recurring_expenses")
+          .select("*")
+          .eq("user_id", userId),
+      ]);
+
+      const transactions = transactionsRes.data ?? [];
+      const accounts = accountsRes.data ?? [];
+      const budgets = budgetsRes.data ?? [];
+      const recurring = recurringRes.data ?? [];
 
       const exportData = {
         exported_at: new Date().toISOString(),
+        schema_version: 2,
         profile: profileRes.data,
-        expenses: expensesRes.data ?? [],
-        budgets: budgetsRes.data ?? [],
-        recurring_expenses: recurringRes.data ?? [],
+        accounts,
+        transactions,
+        budgets,
+        recurring_expenses: recurring,
         summary: {
-          total_expenses: (expensesRes.data ?? []).length,
-          total_budgets: (budgetsRes.data ?? []).length,
-          total_recurring: (recurringRes.data ?? []).length,
+          total_accounts: accounts.length,
+          total_transactions: transactions.length,
+          total_income_transactions: transactions.filter(
+            (t) => t.type === "income"
+          ).length,
+          total_expense_transactions: transactions.filter(
+            (t) => t.type === "expense"
+          ).length,
+          total_budgets: budgets.length,
+          total_recurring: recurring.length,
         },
       };
 
@@ -144,17 +171,19 @@ export default function ExportDataSheet({
                         Download your data as JSON
                       </h3>
                       <p className="text-sm text-brand-dark/40 mt-1.5 leading-relaxed">
-                        This includes your profile, all expenses, budgets, and
-                        recurring bills. The file will be saved to your device.
+                        This includes your profile, accounts, transactions,
+                        budgets, and recurring bills. The file will be saved
+                        to your device.
                       </p>
                     </div>
                   </div>
 
                   <div className="mt-4 grid grid-cols-2 gap-2">
                     {[
-                      "Profile info",
-                      "All expenses",
-                      "All budgets",
+                      "Profile",
+                      "Accounts",
+                      "Transactions",
+                      "Budgets",
                       "Recurring bills",
                     ].map((item) => (
                       <div

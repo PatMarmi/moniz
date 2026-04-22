@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import {
   LayoutDashboard,
-  Receipt,
+  ArrowLeftRight,
+  Wallet,
   PieChart,
   Repeat,
   Lightbulb,
@@ -15,7 +16,8 @@ import {
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/expenses", label: "Expenses", icon: Receipt },
+  { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
+  { href: "/accounts", label: "Accounts", icon: Wallet },
   { href: "/budgets", label: "Budgets", icon: PieChart },
   { href: "/recurring", label: "Recurring", icon: Repeat },
   { href: "/insights", label: "Insights", icon: Lightbulb },

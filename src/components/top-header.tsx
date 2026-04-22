@@ -6,7 +6,8 @@ import { Bell, User } from "lucide-react";
 
 const pageTitles: Record<string, string> = {
   "/dashboard": "Dashboard",
-  "/expenses": "Expenses",
+  "/transactions": "Transactions",
+  "/accounts": "Accounts",
   "/budgets": "Budgets",
   "/recurring": "Recurring",
   "/insights": "Insights",

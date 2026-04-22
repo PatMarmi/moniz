@@ -4,34 +4,44 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Loader2, Check, Trash2, AlertTriangle } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { CATEGORIES } from "@/lib/constants";
-import { getCategoryStyle } from "@/lib/categories";
-import { expenseSchema, firstError } from "@/lib/validation";
+import {
+  CATEGORIES,
+  INCOME_CATEGORIES,
+  getAccountTypeByValue,
+} from "@/lib/constants";
+import { transactionSchema, firstError } from "@/lib/validation";
 import { rateLimit } from "@/lib/rate-limit";
-import type { Expense } from "@/types/database";
+import { getCategoryStyle } from "@/lib/categories";
+import type { Account, Transaction, TxType } from "@/types/database";
 
-interface AddExpenseSheetProps {
+interface AddTransactionSheetProps {
   open: boolean;
   onClose: () => void;
   onSaved: () => void;
   userId: string;
+  /** Accounts available in the picker (active + current edit's archived account) */
+  accounts: Account[];
   defaultCurrency: string;
-  /** Pass an expense to open in edit mode */
-  editExpense?: Expense | null;
+  editTransaction?: Transaction | null;
+  defaultAccountId?: string;
 }
 
-export default function AddExpenseSheet({
+export default function AddTransactionSheet({
   open,
   onClose,
   onSaved,
   userId,
+  accounts,
   defaultCurrency,
-  editExpense,
-}: AddExpenseSheetProps) {
-  const isEdit = !!editExpense;
+  editTransaction,
+  defaultAccountId,
+}: AddTransactionSheetProps) {
+  const isEdit = !!editTransaction;
 
+  const [type, setType] = useState<TxType>("expense");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
+  const [accountId, setAccountId] = useState("");
   const [note, setNote] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [error, setError] = useState<string | null>(null);
@@ -40,27 +50,37 @@ export default function AddExpenseSheet({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Sync form state when sheet opens or editExpense changes
+  // Reset state on open / when edit target changes
   useEffect(() => {
-    if (open) {
-      if (editExpense) {
-        setAmount(String(editExpense.amount));
-        setCategory(editExpense.category);
-        setNote(editExpense.note || "");
-        setDate(editExpense.date);
-      } else {
-        setAmount("");
-        setCategory("");
-        setNote("");
-        setDate(new Date().toISOString().split("T")[0]);
-      }
-      setError(null);
-      setSaving(false);
-      setSuccess(false);
-      setConfirmDelete(false);
-      setDeleting(false);
+    if (!open) return;
+
+    if (editTransaction) {
+      setType(editTransaction.type);
+      setAmount(String(editTransaction.amount));
+      setCategory(editTransaction.category);
+      setAccountId(editTransaction.account_id);
+      setNote(editTransaction.note || "");
+      setDate(editTransaction.date);
+    } else {
+      setType("expense");
+      setAmount("");
+      setCategory("");
+      setAccountId(defaultAccountId || accounts[0]?.id || "");
+      setNote("");
+      setDate(new Date().toISOString().split("T")[0]);
     }
-  }, [open, editExpense]);
+    setError(null);
+    setSaving(false);
+    setSuccess(false);
+    setConfirmDelete(false);
+    setDeleting(false);
+  }, [open, editTransaction, defaultAccountId, accounts]);
+
+  // When type changes in CREATE mode, reset category (valid set differs)
+  function handleTypeChange(newType: TxType) {
+    setType(newType);
+    if (!isEdit) setCategory("");
+  }
 
   function handleClose() {
     if (saving || deleting) return;
@@ -71,10 +91,17 @@ export default function AddExpenseSheet({
     e.preventDefault();
     setError(null);
 
-    const limited = rateLimit(isEdit ? "updateExpense" : "createExpense");
-    if (limited) { setError(limited); return; }
+    const limited = rateLimit(
+      isEdit ? "updateTransaction" : "createTransaction"
+    );
+    if (limited) {
+      setError(limited);
+      return;
+    }
 
-    const parsed = expenseSchema.safeParse({
+    const parsed = transactionSchema.safeParse({
+      account_id: accountId,
+      type,
       amount: parseFloat(amount) || 0,
       category,
       date,
@@ -87,19 +114,20 @@ export default function AddExpenseSheet({
     }
 
     setSaving(true);
-    const numAmount = parsed.data.amount;
     const supabase = createClient();
 
     if (isEdit) {
       const { error: updateError } = await supabase
-        .from("expenses")
+        .from("transactions")
         .update({
-          amount: numAmount,
+          account_id: parsed.data.account_id,
+          type: parsed.data.type,
+          amount: parsed.data.amount,
           category: parsed.data.category,
           note: parsed.data.note?.trim() || null,
           date: parsed.data.date,
         })
-        .eq("id", editExpense!.id)
+        .eq("id", editTransaction!.id)
         .eq("user_id", userId);
 
       if (updateError) {
@@ -108,9 +136,11 @@ export default function AddExpenseSheet({
         return;
       }
     } else {
-      const { error: insertError } = await supabase.from("expenses").insert({
+      const { error: insertError } = await supabase.from("transactions").insert({
         user_id: userId,
-        amount: numAmount,
+        account_id: parsed.data.account_id,
+        type: parsed.data.type,
+        amount: parsed.data.amount,
         category: parsed.data.category,
         currency: defaultCurrency,
         note: parsed.data.note?.trim() || null,
@@ -132,19 +162,21 @@ export default function AddExpenseSheet({
   }
 
   async function handleDelete() {
-    if (!editExpense) return;
+    if (!editTransaction) return;
     setError(null);
 
-    const limited = rateLimit("deleteExpense");
-    if (limited) { setError(limited); return; }
+    const limited = rateLimit("deleteTransaction");
+    if (limited) {
+      setError(limited);
+      return;
+    }
 
     setDeleting(true);
-
     const supabase = createClient();
     const { error: deleteError } = await supabase
-      .from("expenses")
+      .from("transactions")
       .delete()
-      .eq("id", editExpense.id)
+      .eq("id", editTransaction.id)
       .eq("user_id", userId);
 
     if (deleteError) {
@@ -156,6 +188,8 @@ export default function AddExpenseSheet({
     onSaved();
     onClose();
   }
+
+  const categoryList = type === "income" ? INCOME_CATEGORIES : CATEGORIES;
 
   return (
     <AnimatePresence>
@@ -184,7 +218,7 @@ export default function AddExpenseSheet({
             <div className="px-5 pb-8 pt-2">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-lg font-bold text-brand-dark">
-                  {isEdit ? "Edit expense" : "Add expense"}
+                  {isEdit ? "Edit transaction" : "New transaction"}
                 </h2>
                 <button
                   onClick={handleClose}
@@ -199,15 +233,19 @@ export default function AddExpenseSheet({
                   <div className="bg-brand-accent/5 rounded-2xl p-5 border border-brand-accent/10">
                     <div className="flex items-start gap-3">
                       <div className="w-9 h-9 rounded-xl bg-brand-accent/10 flex items-center justify-center shrink-0 mt-0.5">
-                        <AlertTriangle size={17} className="text-brand-accent" />
+                        <AlertTriangle
+                          size={17}
+                          className="text-brand-accent"
+                        />
                       </div>
                       <div>
                         <h3 className="text-sm font-semibold text-brand-dark">
-                          Delete this expense?
+                          Delete this transaction?
                         </h3>
                         <p className="text-sm text-brand-dark/40 mt-1 leading-relaxed">
-                          This ${Number(editExpense!.amount).toFixed(2)} expense
-                          will be permanently removed.
+                          This ${Number(editTransaction!.amount).toFixed(2)}{" "}
+                          {editTransaction!.type} will be permanently removed.
+                          Your account balance will update.
                         </p>
                       </div>
                     </div>
@@ -243,24 +281,60 @@ export default function AddExpenseSheet({
                 </div>
               ) : (
                 <form onSubmit={handleSubmit} className="space-y-5">
+                  {/* Type switcher */}
+                  <div className="grid grid-cols-2 gap-1 p-1 bg-brand-dark/5 rounded-2xl">
+                    <button
+                      type="button"
+                      onClick={() => handleTypeChange("expense")}
+                      className={`py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                        type === "expense"
+                          ? "bg-brand-beige text-brand-dark shadow-sm"
+                          : "text-brand-dark/40"
+                      }`}
+                    >
+                      Expense
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleTypeChange("income")}
+                      className={`py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                        type === "income"
+                          ? "bg-brand-beige text-brand-green shadow-sm"
+                          : "text-brand-dark/40"
+                      }`}
+                    >
+                      Income
+                    </button>
+                  </div>
+
                   {/* Amount */}
                   <div>
                     <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
                       Amount
                     </label>
                     <div className="relative">
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-dark/30 text-xl font-semibold">
+                      <span
+                        className={`absolute left-4 top-1/2 -translate-y-1/2 text-xl font-semibold ${
+                          type === "income"
+                            ? "text-brand-green/60"
+                            : "text-brand-dark/30"
+                        }`}
+                      >
                         $
                       </span>
                       <input
                         type="number"
-                        autoFocus
+                        autoFocus={!isEdit}
                         min="0.01"
                         step="0.01"
                         value={amount}
                         onChange={(e) => setAmount(e.target.value)}
                         placeholder="0.00"
-                        className="w-full pl-9 pr-4 py-3.5 bg-white/60 border border-brand-dark/10 rounded-2xl text-2xl font-bold text-brand-dark placeholder:text-brand-dark/15 focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors"
+                        className={`w-full pl-9 pr-4 py-3.5 bg-white/60 border border-brand-dark/10 rounded-2xl text-2xl font-bold placeholder:text-brand-dark/15 focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors ${
+                          type === "income"
+                            ? "text-brand-green"
+                            : "text-brand-dark"
+                        }`}
                       />
                     </div>
                   </div>
@@ -271,10 +345,19 @@ export default function AddExpenseSheet({
                       Category
                     </label>
                     <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                      {CATEGORIES.map((cat) => {
+                      {categoryList.map((cat) => {
                         const isSelected = category === cat.value;
-                        const style = getCategoryStyle(cat.value);
                         const Icon = cat.icon;
+                        // Expense categories use existing color system; income uses brand-green
+                        const expenseStyle =
+                          type === "expense"
+                            ? getCategoryStyle(cat.value)
+                            : null;
+                        const iconColor = isSelected
+                          ? "text-brand-accent"
+                          : type === "income"
+                          ? "text-brand-green/70"
+                          : expenseStyle?.iconColor ?? "text-brand-dark/50";
 
                         return (
                           <button
@@ -290,9 +373,7 @@ export default function AddExpenseSheet({
                             <Icon
                               size={18}
                               strokeWidth={1.6}
-                              className={
-                                isSelected ? "text-brand-accent" : style.iconColor
-                              }
+                              className={iconColor}
                             />
                             <span className="text-[11px] font-medium leading-tight">
                               {cat.label}
@@ -301,6 +382,75 @@ export default function AddExpenseSheet({
                         );
                       })}
                     </div>
+                  </div>
+
+                  {/* Account */}
+                  <div>
+                    <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
+                      Account
+                    </label>
+                    {accounts.length === 0 ? (
+                      <p className="text-sm text-brand-dark/40 bg-brand-dark/[0.03] rounded-xl px-4 py-3">
+                        You don&apos;t have any active accounts. Create one to
+                        continue.
+                      </p>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {accounts.map((a) => {
+                          const typeDef = getAccountTypeByValue(a.type);
+                          const Icon = typeDef?.icon;
+                          const isSelected = accountId === a.id;
+                          const isArchived = !!a.archived_at;
+                          return (
+                            <button
+                              key={a.id}
+                              type="button"
+                              onClick={() => setAccountId(a.id)}
+                              className={`flex items-center gap-3 px-4 py-3 rounded-2xl border transition-all text-left ${
+                                isSelected
+                                  ? "bg-brand-dark text-brand-beige border-brand-dark"
+                                  : "bg-white/60 text-brand-dark border-brand-dark/10 hover:border-brand-dark/20"
+                              }`}
+                            >
+                              {Icon && (
+                                <Icon
+                                  size={16}
+                                  strokeWidth={1.6}
+                                  className={
+                                    isSelected
+                                      ? "text-brand-accent"
+                                      : "text-brand-dark/50"
+                                  }
+                                />
+                              )}
+                              <span className="text-sm font-medium flex-1 min-w-0 truncate">
+                                {a.name}
+                                {isArchived && (
+                                  <span
+                                    className={`ml-2 text-[10px] font-normal ${
+                                      isSelected
+                                        ? "text-brand-beige/40"
+                                        : "text-brand-dark/30"
+                                    }`}
+                                  >
+                                    · archived
+                                  </span>
+                                )}
+                              </span>
+                              <span
+                                className={`text-[11px] uppercase tracking-wider ${
+                                  isSelected
+                                    ? "text-brand-beige/40"
+                                    : "text-brand-dark/30"
+                                }`}
+                              >
+                                {typeDef?.label}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* Date */}
@@ -312,7 +462,6 @@ export default function AddExpenseSheet({
                       type="date"
                       value={date}
                       onChange={(e) => setDate(e.target.value)}
-                      max={new Date().toISOString().split("T")[0]}
                       className="w-full px-4 py-3 bg-white/60 border border-brand-dark/10 rounded-2xl text-sm text-brand-dark focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors"
                     />
                   </div>
@@ -341,7 +490,7 @@ export default function AddExpenseSheet({
 
                   <button
                     type="submit"
-                    disabled={saving || success}
+                    disabled={saving || success || accounts.length === 0}
                     className={`w-full flex items-center justify-center gap-2 font-semibold py-3.5 rounded-2xl transition-all text-sm active:scale-[0.98] disabled:cursor-not-allowed ${
                       success
                         ? "bg-brand-green text-brand-beige"
@@ -359,9 +508,9 @@ export default function AddExpenseSheet({
                         Saving…
                       </>
                     ) : isEdit ? (
-                      "Update expense"
+                      "Update transaction"
                     ) : (
-                      "Add expense"
+                      `Add ${type}`
                     )}
                   </button>
 
@@ -372,7 +521,7 @@ export default function AddExpenseSheet({
                       className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-medium text-brand-accent/60 hover:text-brand-accent hover:bg-brand-accent/5 transition-colors"
                     >
                       <Trash2 size={14} />
-                      Delete this expense
+                      Delete this transaction
                     </button>
                   )}
                 </form>

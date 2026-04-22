@@ -61,9 +61,6 @@ export function checkRateLimit(
 export const RATE_LIMITS = {
   login: { max: 5, window: 60_000 },
   signup: { max: 3, window: 60_000 },
-  createExpense: { max: 20, window: 60_000 },
-  updateExpense: { max: 20, window: 60_000 },
-  deleteExpense: { max: 10, window: 60_000 },
   createBudget: { max: 15, window: 60_000 },
   updateBudget: { max: 15, window: 60_000 },
   deleteBudget: { max: 10, window: 60_000 },
@@ -71,7 +68,15 @@ export const RATE_LIMITS = {
   updateRecurring: { max: 10, window: 60_000 },
   deleteRecurring: { max: 10, window: 60_000 },
   exportData: { max: 3, window: 60_000 },
-  deleteAccount: { max: 2, window: 300_000 },
+  deleteAllData: { max: 2, window: 300_000 },
+  // Accounts (financial accounts, not auth accounts)
+  createAccount: { max: 10, window: 60_000 },
+  updateAccount: { max: 10, window: 60_000 },
+  deleteAccount: { max: 10, window: 60_000 }, // archive (soft delete)
+  // Transactions
+  createTransaction: { max: 30, window: 60_000 },
+  updateTransaction: { max: 20, window: 60_000 },
+  deleteTransaction: { max: 10, window: 60_000 },
 } as const;
 
 export function rateLimit(action: keyof typeof RATE_LIMITS): string | null {

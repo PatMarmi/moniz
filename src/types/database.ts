@@ -10,24 +10,12 @@ export interface UserProfile {
   updated_at: string;
 }
 
-export interface Expense {
-  id: string;
-  user_id: string;
-  amount: number;
-  category: string;
-  currency: string;
-  note: string | null;
-  date: string;
-  month: string; // generated column: first day of month
-  created_at: string;
-}
-
 export interface Budget {
   id: string;
   user_id: string;
   category: string;
   limit_amount: number;
-  month: string; // first day of month, e.g. '2026-04-01'
+  month: string;
   created_at: string;
 }
 
@@ -40,4 +28,45 @@ export interface RecurringExpense {
   category: string;
   is_active: boolean;
   created_at: string;
+}
+
+// ── Accounts + transactions (new ledger layer) ──
+
+export type AccountType =
+  | "cash"
+  | "checking"
+  | "savings"
+  | "credit"
+  | "other";
+
+export interface Account {
+  id: string;
+  user_id: string;
+  name: string;
+  type: AccountType;
+  starting_balance: number;
+  currency: string;
+  archived_at: string | null;
+  created_at: string;
+}
+
+export type TxType = "income" | "expense";
+
+export interface Transaction {
+  id: string;
+  user_id: string;
+  account_id: string;
+  type: TxType;
+  amount: number;
+  category: string;
+  currency: string;
+  note: string | null;
+  date: string;
+  month: string; // generated column
+  created_at: string;
+}
+
+/** Account with derived balance — computed client-side from transactions */
+export interface AccountWithBalance extends Account {
+  current_balance: number;
 }

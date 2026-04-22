@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
-  Receipt,
+  ArrowLeftRight,
   PieChart,
   Lightbulb,
   Settings,
@@ -12,7 +12,7 @@ import {
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/expenses", label: "Expenses", icon: Receipt },
+  { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
   { href: "/budgets", label: "Budgets", icon: PieChart },
   { href: "/insights", label: "Insights", icon: Lightbulb },
   { href: "/settings", label: "Settings", icon: Settings },

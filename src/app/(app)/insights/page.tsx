@@ -22,7 +22,7 @@ import {
   type InsightSection,
   type InsightType,
 } from "@/lib/insights-engine";
-import type { Expense, Budget, RecurringExpense } from "@/types/database";
+import type { Transaction, Budget, RecurringExpense } from "@/types/database";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -54,10 +54,11 @@ const SECTIONS: InsightSection[] = ["overview", "budgets", "patterns", "recurrin
 export default function InsightsPage() {
   const { user } = useAuth();
   const [month, setMonth] = useState(() => monthStart());
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  // After Phase 4B: expenses are transactions filtered to type='expense'
+  const [expenses, setExpenses] = useState<Transaction[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [recurring, setRecurring] = useState<RecurringExpense[]>([]);
-  const [prevExpenses, setPrevExpenses] = useState<Expense[]>([]);
+  const [prevExpenses, setPrevExpenses] = useState<Transaction[]>([]);
   const [prevBudgets, setPrevBudgets] = useState<Budget[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -68,10 +69,10 @@ export default function InsightsPage() {
     const prevMonth = prevMonthStart(month);
 
     Promise.all([
-      supabase.from("expenses").select("*").eq("user_id", user.id).eq("month", month),
+      supabase.from("transactions").select("*").eq("user_id", user.id).eq("type", "expense").eq("month", month),
       supabase.from("budgets").select("*").eq("user_id", user.id).eq("month", month),
       supabase.from("recurring_expenses").select("*").eq("user_id", user.id).eq("is_active", true),
-      supabase.from("expenses").select("*").eq("user_id", user.id).eq("month", prevMonth),
+      supabase.from("transactions").select("*").eq("user_id", user.id).eq("type", "expense").eq("month", prevMonth),
       supabase.from("budgets").select("*").eq("user_id", user.id).eq("month", prevMonth),
     ]).then(([expRes, budRes, recRes, prevExpRes, prevBudRes]) => {
       setExpenses(expRes.data ?? []);
@@ -105,7 +106,7 @@ export default function InsightsPage() {
           <p className="text-sm text-brand-beige/40 mt-2 max-w-sm mx-auto leading-relaxed">
             Insights will appear once you add more expenses and budgets for this month.
           </p>
-          <a href="/expenses" className="mt-8 inline-flex items-center gap-2 bg-brand-accent text-white font-semibold px-6 py-3 rounded-full hover:bg-brand-accent/90 transition-colors text-sm"><Plus size={16} strokeWidth={2.2} />Add expenses</a>
+          <a href="/transactions" className="mt-8 inline-flex items-center gap-2 bg-brand-accent text-white font-semibold px-6 py-3 rounded-full hover:bg-brand-accent/90 transition-colors text-sm"><Plus size={16} strokeWidth={2.2} />Add transactions</a>
         </motion.div>
       </div>
     );

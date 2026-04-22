@@ -47,7 +47,7 @@ export default function DeleteAccountSheet({
   async function handleDelete() {
     setError(null);
 
-    const limited = rateLimit("deleteAccount");
+    const limited = rateLimit("deleteAllData");
     if (limited) {
       setError(limited);
       return;
@@ -67,7 +67,11 @@ export default function DeleteAccountSheet({
     // Delete all user data — RLS ensures we can only delete our own rows.
     // CASCADE FKs would also handle this if the auth user were deleted,
     // but since we can't delete auth.users from the client, we do it explicitly.
+    // Order matters: transactions reference accounts (CASCADE), so we delete
+    // transactions first to avoid relying on cascade semantics.
     const results = await Promise.all([
+      supabase.from("transactions").delete().eq("user_id", userId),
+      supabase.from("accounts").delete().eq("user_id", userId),
       supabase.from("expenses").delete().eq("user_id", userId),
       supabase.from("budgets").delete().eq("user_id", userId),
       supabase.from("recurring_expenses").delete().eq("user_id", userId),
