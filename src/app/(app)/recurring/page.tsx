@@ -2,10 +2,12 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Plus, Repeat, Calendar, Pause, Play } from "lucide-react";
+import { Plus, Repeat, Calendar, Pause, Play, Check } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { createClient } from "@/lib/supabase/client";
 import { getCategoryByValue } from "@/lib/constants";
+import { monthStart } from "@/lib/months";
+import { useAutoPostRecurring } from "@/lib/use-auto-post-recurring";
 import RecurringSheet from "@/components/recurring-sheet";
 import type { RecurringExpense } from "@/types/database";
 
@@ -30,28 +32,49 @@ function ordinal(n: number): string {
 export default function RecurringPage() {
   const { user } = useAuth();
   const [items, setItems] = useState<RecurringExpense[]>([]);
+  /** IDs of recurring items that have already posted a transaction this month */
+  const [postedThisMonth, setPostedThisMonth] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editItem, setEditItem] = useState<RecurringExpense | null>(null);
 
-  const fetchData = useCallback(() => {
+  const fetchData = useCallback(async () => {
     if (!user) return;
     const supabase = createClient();
-    supabase
-      .from("recurring_expenses")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("is_active", { ascending: false })
-      .order("due_day", { ascending: true })
-      .then(({ data }) => {
-        setItems(data ?? []);
-        setLoading(false);
-      });
+    const month = monthStart();
+
+    const [recRes, postedRes] = await Promise.all([
+      supabase
+        .from("recurring_expenses")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("is_active", { ascending: false })
+        .order("due_day", { ascending: true }),
+      supabase
+        .from("transactions")
+        .select("posted_from_recurring_id")
+        .eq("user_id", user.id)
+        .eq("month", month)
+        .not("posted_from_recurring_id", "is", null),
+    ]);
+
+    setItems(recRes.data ?? []);
+    setPostedThisMonth(
+      new Set(
+        (postedRes.data ?? [])
+          .map((p) => p.posted_from_recurring_id as string | null)
+          .filter((id): id is string => id !== null)
+      )
+    );
+    setLoading(false);
   }, [user]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Trigger auto-posting on visit; refresh once the posting completes.
+  useAutoPostRecurring(fetchData);
 
   if (!user) return null;
 
@@ -180,6 +203,7 @@ export default function RecurringPage() {
             {active.map((item) => {
               const catDef = getCategoryByValue(item.category);
               const Icon = catDef?.icon;
+              const isPosted = postedThisMonth.has(item.id);
 
               return (
                 <div
@@ -200,9 +224,17 @@ export default function RecurringPage() {
                       </div>
                     )}
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-brand-dark truncate">
-                        {item.name}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-brand-dark truncate">
+                          {item.name}
+                        </p>
+                        {isPosted && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-brand-green bg-brand-green/10 px-1.5 py-0.5 rounded-full shrink-0">
+                            <Check size={9} strokeWidth={2.5} />
+                            Posted
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-brand-dark/30 mt-0.5 flex items-center gap-1">
                         <Calendar size={10} className="text-brand-dark/20" />
                         Due on the {ordinal(item.due_day)}

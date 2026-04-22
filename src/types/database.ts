@@ -64,6 +64,8 @@ export interface Transaction {
   date: string;
   month: string; // generated column
   created_at: string;
+  /** Set when this row was auto-posted from a recurring expense */
+  posted_from_recurring_id?: string | null;
 }
 
 /** Account with derived balance — computed client-side from transactions */

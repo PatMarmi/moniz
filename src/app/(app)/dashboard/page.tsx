@@ -15,6 +15,7 @@ import { createClient } from "@/lib/supabase/client";
 import { getCategoryByValue, getAccountTypeByValue } from "@/lib/constants";
 import MonthSelector from "@/components/month-selector";
 import { monthStart, isCurrentMonth, daysLeftIn, prevMonthStart, formatMonth } from "@/lib/months";
+import { useAutoPostRecurring } from "@/lib/use-auto-post-recurring";
 import type { Transaction, Budget, RecurringExpense, Account } from "@/types/database";
 
 /** Minimal transaction fields needed to compute balances */
@@ -92,6 +93,11 @@ export default function DashboardPage() {
   }, [user, month]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Auto-post any recurring expenses that are due this month and haven't
+  // been posted yet. Runs at most once per (user, month) per session.
+  // If anything is posted, refetch so the new transactions appear.
+  useAutoPostRecurring(fetchData);
 
   if (!user) return null;
 

@@ -11,6 +11,7 @@ import {
 } from "@/lib/constants";
 import MonthSelector from "@/components/month-selector";
 import { monthStart, formatMonth } from "@/lib/months";
+import { useAutoPostRecurring } from "@/lib/use-auto-post-recurring";
 import AddTransactionSheet from "@/components/add-transaction-sheet";
 import type { Account, Transaction } from "@/types/database";
 
@@ -81,6 +82,10 @@ export default function TransactionsPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Post any due recurring expenses for the current month, then refetch.
+  // Idempotent and capped at once per session by the hook.
+  useAutoPostRecurring(fetchData);
 
   if (!user) return null;
 
