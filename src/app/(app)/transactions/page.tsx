@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Plus, Receipt, Loader2 } from "lucide-react";
+import { Plus, Receipt, Loader2, ArrowLeftRight, ArrowRight } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -95,6 +95,7 @@ export default function TransactionsPage() {
    * Accounts to show in the sheet's picker.
    * If editing a transaction tied to an archived account, include that
    * archived account so editing still works without forcing a reassignment.
+   * Also include the paired account for transfers (so both sides resolve).
    */
   const sheetAccounts = editTransaction
     ? [
@@ -102,13 +103,18 @@ export default function TransactionsPage() {
         ...allAccounts.filter(
           (a) =>
             a.archived_at &&
-            a.id === editTransaction.account_id &&
+            (a.id === editTransaction.account_id ||
+              a.id === editTransaction.paired_account_id) &&
             !activeAccounts.find((x) => x.id === a.id)
         ),
       ]
     : activeAccounts;
 
-  // Month totals
+  // Visible ledger: show only one row per transfer (the transfer_out side).
+  // The transfer_in side still exists in the DB and contributes to balances.
+  const visibleTxns = transactions.filter((t) => t.type !== "transfer_in");
+
+  // Month totals — transfers are deliberately excluded from income/expense math.
   const totalIncome = transactions
     .filter((t) => t.type === "income")
     .reduce((s, t) => s + Number(t.amount), 0);
@@ -117,9 +123,9 @@ export default function TransactionsPage() {
     .reduce((s, t) => s + Number(t.amount), 0);
   const net = totalIncome - totalExpense;
 
-  // Group by date
+  // Group visible rows by date
   const byDate: Record<string, Transaction[]> = {};
-  transactions.forEach((t) => {
+  visibleTxns.forEach((t) => {
     byDate[t.date] = byDate[t.date] || [];
     byDate[t.date].push(t);
   });
@@ -273,11 +279,12 @@ export default function TransactionsPage() {
       {/* Grouped by day */}
       <div className="space-y-4">
         {sortedDates.map((d) => {
-          const dayTotal = byDate[d].reduce(
-            (s, t) =>
-              s + (t.type === "income" ? Number(t.amount) : -Number(t.amount)),
-            0
-          );
+          // Daily subtotal — transfers excluded (they're zero-sum across the user's accounts)
+          const dayTotal = byDate[d].reduce((s, t) => {
+            if (t.type === "income") return s + Number(t.amount);
+            if (t.type === "expense") return s - Number(t.amount);
+            return s;
+          }, 0);
           return (
             <motion.div
               key={d}
@@ -291,13 +298,7 @@ export default function TransactionsPage() {
                 <p className="text-xs text-brand-dark/30 uppercase tracking-wider font-semibold">
                   {formatDayHeader(d)}
                 </p>
-                <p
-                  className={`text-xs font-semibold ${
-                    dayTotal >= 0
-                      ? "text-brand-dark/40"
-                      : "text-brand-dark/40"
-                  }`}
-                >
+                <p className="text-xs font-semibold text-brand-dark/40">
                   {dayTotal > 0 ? "+" : dayTotal < 0 ? "-" : ""}$
                   {Math.abs(dayTotal).toFixed(2)}
                 </p>
@@ -305,6 +306,54 @@ export default function TransactionsPage() {
               <div className="bg-white/60 backdrop-blur-sm rounded-2xl border border-brand-dark/5 overflow-hidden">
                 <div className="divide-y divide-brand-dark/5">
                   {byDate[d].map((t) => {
+                    if (t.type === "transfer_out") {
+                      const fromAccount = accountById[t.account_id];
+                      const toAccount = t.paired_account_id
+                        ? accountById[t.paired_account_id]
+                        : undefined;
+                      return (
+                        <button
+                          key={t.id}
+                          onClick={() => openEdit(t)}
+                          className="w-full flex items-center justify-between px-5 py-4 hover:bg-brand-dark/[0.03] active:bg-brand-dark/[0.05] transition-colors text-left"
+                        >
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-brand-dark/8">
+                              <ArrowLeftRight
+                                size={16}
+                                strokeWidth={1.7}
+                                className="text-brand-dark/60"
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <p className="text-sm font-medium text-brand-dark">
+                                  Transfer
+                                </p>
+                                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-brand-dark/5 text-brand-dark/40">
+                                  Internal
+                                </span>
+                              </div>
+                              <p className="text-xs text-brand-dark/30 truncate flex items-center gap-1">
+                                <span>{fromAccount?.name || "—"}</span>
+                                <ArrowRight
+                                  size={10}
+                                  className="text-brand-dark/20 shrink-0"
+                                />
+                                <span>{toAccount?.name || "—"}</span>
+                                {t.note ? (
+                                  <span className="ml-1">· {t.note}</span>
+                                ) : null}
+                              </p>
+                            </div>
+                          </div>
+                          <p className="text-sm font-bold whitespace-nowrap ml-3 text-brand-dark/60">
+                            ${Number(t.amount).toFixed(2)}
+                          </p>
+                        </button>
+                      );
+                    }
+
                     const catDef = getAnyCategoryByValue(t.category);
                     const Icon = catDef?.icon;
                     const account = accountById[t.account_id];

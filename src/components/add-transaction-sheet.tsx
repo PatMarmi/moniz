@@ -2,17 +2,30 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Loader2, Check, Trash2, AlertTriangle } from "lucide-react";
+import {
+  X,
+  Loader2,
+  Check,
+  Trash2,
+  AlertTriangle,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import {
   CATEGORIES,
   INCOME_CATEGORIES,
   getAccountTypeByValue,
 } from "@/lib/constants";
-import { transactionSchema, firstError } from "@/lib/validation";
+import {
+  transactionSchema,
+  transferSchema,
+  firstError,
+} from "@/lib/validation";
 import { rateLimit } from "@/lib/rate-limit";
 import { getCategoryStyle } from "@/lib/categories";
-import type { Account, Transaction, TxType } from "@/types/database";
+import type { Account, Transaction } from "@/types/database";
+
+/** UI-level mode — distinct from DB-level type values */
+type Mode = "expense" | "income" | "transfer";
 
 interface AddTransactionSheetProps {
   open: boolean;
@@ -24,6 +37,16 @@ interface AddTransactionSheetProps {
   defaultCurrency: string;
   editTransaction?: Transaction | null;
   defaultAccountId?: string;
+}
+
+/**
+ * Map a DB row's `type` to the UI mode.
+ * transfer_in / transfer_out both come from "transfer" mode.
+ */
+function modeFromTxType(t: Transaction["type"]): Mode {
+  if (t === "income") return "income";
+  if (t === "transfer_in" || t === "transfer_out") return "transfer";
+  return "expense";
 }
 
 export default function AddTransactionSheet({
@@ -38,10 +61,13 @@ export default function AddTransactionSheet({
 }: AddTransactionSheetProps) {
   const isEdit = !!editTransaction;
 
-  const [type, setType] = useState<TxType>("expense");
+  const [mode, setMode] = useState<Mode>("expense");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("");
+  // For income/expense: the affected account.
+  // For transfer: the source account (paired with toAccountId).
   const [accountId, setAccountId] = useState("");
+  const [toAccountId, setToAccountId] = useState("");
   const [note, setNote] = useState("");
   const [date, setDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [error, setError] = useState<string | null>(null);
@@ -55,17 +81,35 @@ export default function AddTransactionSheet({
     if (!open) return;
 
     if (editTransaction) {
-      setType(editTransaction.type);
+      const editMode = modeFromTxType(editTransaction.type);
+      setMode(editMode);
       setAmount(String(editTransaction.amount));
       setCategory(editTransaction.category);
-      setAccountId(editTransaction.account_id);
       setNote(editTransaction.note || "");
       setDate(editTransaction.date);
+
+      if (editMode === "transfer") {
+        // The row we render in the ledger is always the transfer_out side.
+        // account_id = source, paired_account_id = destination.
+        // If we somehow got handed a transfer_in row, swap so the form
+        // still feels source → destination from the user's perspective.
+        if (editTransaction.type === "transfer_out") {
+          setAccountId(editTransaction.account_id);
+          setToAccountId(editTransaction.paired_account_id || "");
+        } else {
+          setAccountId(editTransaction.paired_account_id || "");
+          setToAccountId(editTransaction.account_id);
+        }
+      } else {
+        setAccountId(editTransaction.account_id);
+        setToAccountId("");
+      }
     } else {
-      setType("expense");
+      setMode("expense");
       setAmount("");
       setCategory("");
       setAccountId(defaultAccountId || accounts[0]?.id || "");
+      setToAccountId("");
       setNote("");
       setDate(new Date().toISOString().split("T")[0]);
     }
@@ -76,10 +120,13 @@ export default function AddTransactionSheet({
     setDeleting(false);
   }, [open, editTransaction, defaultAccountId, accounts]);
 
-  // When type changes in CREATE mode, reset category (valid set differs)
-  function handleTypeChange(newType: TxType) {
-    setType(newType);
-    if (!isEdit) setCategory("");
+  // Switching mode in CREATE clears mode-specific state.
+  // In EDIT, mode is locked (UI doesn't render the switcher).
+  function handleModeChange(newMode: Mode) {
+    if (isEdit) return;
+    setMode(newMode);
+    setCategory("");
+    setToAccountId("");
   }
 
   function handleClose() {
@@ -99,58 +146,171 @@ export default function AddTransactionSheet({
       return;
     }
 
-    const parsed = transactionSchema.safeParse({
-      account_id: accountId,
-      type,
-      amount: parseFloat(amount) || 0,
-      category,
-      date,
-      note,
-    });
-
-    if (!parsed.success) {
-      setError(firstError(parsed.error));
-      return;
-    }
-
     setSaving(true);
     const supabase = createClient();
 
-    if (isEdit) {
-      const { error: updateError } = await supabase
-        .from("transactions")
-        .update({
-          account_id: parsed.data.account_id,
-          type: parsed.data.type,
-          amount: parsed.data.amount,
-          category: parsed.data.category,
-          note: parsed.data.note?.trim() || null,
-          date: parsed.data.date,
-        })
-        .eq("id", editTransaction!.id)
-        .eq("user_id", userId);
-
-      if (updateError) {
-        setError(updateError.message);
+    if (mode === "transfer") {
+      const parsed = transferSchema.safeParse({
+        from_account_id: accountId,
+        to_account_id: toAccountId,
+        amount: parseFloat(amount) || 0,
+        date,
+        note,
+      });
+      if (!parsed.success) {
+        setError(firstError(parsed.error));
         setSaving(false);
         return;
       }
-    } else {
-      const { error: insertError } = await supabase.from("transactions").insert({
-        user_id: userId,
-        account_id: parsed.data.account_id,
-        type: parsed.data.type,
-        amount: parsed.data.amount,
-        category: parsed.data.category,
-        currency: defaultCurrency,
-        note: parsed.data.note?.trim() || null,
-        date: parsed.data.date,
-      });
 
-      if (insertError) {
-        setError(insertError.message);
+      const trimmedNote = parsed.data.note?.trim() || null;
+
+      if (isEdit && editTransaction?.transfer_group_id) {
+        // ── Update both rows of the existing transfer group ──
+        const groupId = editTransaction.transfer_group_id;
+        const { data: pair, error: fetchErr } = await supabase
+          .from("transactions")
+          .select("id, type")
+          .eq("user_id", userId)
+          .eq("transfer_group_id", groupId);
+
+        if (fetchErr || !pair || pair.length !== 2) {
+          setError(fetchErr?.message || "Could not load transfer pair.");
+          setSaving(false);
+          return;
+        }
+
+        const outRow = pair.find((r) => r.type === "transfer_out");
+        const inRow = pair.find((r) => r.type === "transfer_in");
+        if (!outRow || !inRow) {
+          setError("Transfer pair is broken.");
+          setSaving(false);
+          return;
+        }
+
+        const baseFields = {
+          amount: parsed.data.amount,
+          date: parsed.data.date,
+          note: trimmedNote,
+        };
+
+        const [outRes, inRes] = await Promise.all([
+          supabase
+            .from("transactions")
+            .update({
+              ...baseFields,
+              account_id: parsed.data.from_account_id,
+              paired_account_id: parsed.data.to_account_id,
+            })
+            .eq("id", outRow.id)
+            .eq("user_id", userId),
+          supabase
+            .from("transactions")
+            .update({
+              ...baseFields,
+              account_id: parsed.data.to_account_id,
+              paired_account_id: parsed.data.from_account_id,
+            })
+            .eq("id", inRow.id)
+            .eq("user_id", userId),
+        ]);
+
+        const updateErr = outRes.error || inRes.error;
+        if (updateErr) {
+          setError(updateErr.message);
+          setSaving(false);
+          return;
+        }
+      } else {
+        // ── Create a new transfer pair ──
+        const groupId = crypto.randomUUID();
+        const { error: insertError } = await supabase
+          .from("transactions")
+          .insert([
+            {
+              user_id: userId,
+              account_id: parsed.data.from_account_id,
+              type: "transfer_out",
+              amount: parsed.data.amount,
+              category: "transfer",
+              currency: defaultCurrency,
+              note: trimmedNote,
+              date: parsed.data.date,
+              transfer_group_id: groupId,
+              paired_account_id: parsed.data.to_account_id,
+            },
+            {
+              user_id: userId,
+              account_id: parsed.data.to_account_id,
+              type: "transfer_in",
+              amount: parsed.data.amount,
+              category: "transfer",
+              currency: defaultCurrency,
+              note: trimmedNote,
+              date: parsed.data.date,
+              transfer_group_id: groupId,
+              paired_account_id: parsed.data.from_account_id,
+            },
+          ]);
+
+        if (insertError) {
+          setError(insertError.message);
+          setSaving(false);
+          return;
+        }
+      }
+    } else {
+      // ── Income / Expense path (unchanged from before) ──
+      const parsed = transactionSchema.safeParse({
+        account_id: accountId,
+        type: mode,
+        amount: parseFloat(amount) || 0,
+        category,
+        date,
+        note,
+      });
+      if (!parsed.success) {
+        setError(firstError(parsed.error));
         setSaving(false);
         return;
+      }
+
+      if (isEdit) {
+        const { error: updateError } = await supabase
+          .from("transactions")
+          .update({
+            account_id: parsed.data.account_id,
+            type: parsed.data.type,
+            amount: parsed.data.amount,
+            category: parsed.data.category,
+            note: parsed.data.note?.trim() || null,
+            date: parsed.data.date,
+          })
+          .eq("id", editTransaction!.id)
+          .eq("user_id", userId);
+        if (updateError) {
+          setError(updateError.message);
+          setSaving(false);
+          return;
+        }
+      } else {
+        const { error: insertError } = await supabase
+          .from("transactions")
+          .insert({
+            user_id: userId,
+            account_id: parsed.data.account_id,
+            type: parsed.data.type,
+            amount: parsed.data.amount,
+            category: parsed.data.category,
+            currency: defaultCurrency,
+            note: parsed.data.note?.trim() || null,
+            date: parsed.data.date,
+          });
+        if (insertError) {
+          setError(insertError.message);
+          setSaving(false);
+          return;
+        }
       }
     }
 
@@ -173,11 +333,24 @@ export default function AddTransactionSheet({
 
     setDeleting(true);
     const supabase = createClient();
-    const { error: deleteError } = await supabase
-      .from("transactions")
-      .delete()
-      .eq("id", editTransaction.id)
-      .eq("user_id", userId);
+
+    let deleteError;
+    if (editTransaction.transfer_group_id) {
+      // Delete BOTH rows of the transfer pair in one statement.
+      const result = await supabase
+        .from("transactions")
+        .delete()
+        .eq("user_id", userId)
+        .eq("transfer_group_id", editTransaction.transfer_group_id);
+      deleteError = result.error;
+    } else {
+      const result = await supabase
+        .from("transactions")
+        .delete()
+        .eq("id", editTransaction.id)
+        .eq("user_id", userId);
+      deleteError = result.error;
+    }
 
     if (deleteError) {
       setError(deleteError.message);
@@ -189,7 +362,14 @@ export default function AddTransactionSheet({
     onClose();
   }
 
-  const categoryList = type === "income" ? INCOME_CATEGORIES : CATEGORIES;
+  const categoryList = mode === "income" ? INCOME_CATEGORIES : CATEGORIES;
+  const isTransfer = mode === "transfer";
+  const submitDisabled =
+    saving ||
+    success ||
+    (isTransfer
+      ? accounts.filter((a) => !a.archived_at).length < 2
+      : accounts.length === 0);
 
   return (
     <AnimatePresence>
@@ -218,7 +398,13 @@ export default function AddTransactionSheet({
             <div className="px-5 pb-8 pt-2">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-lg font-bold text-brand-dark">
-                  {isEdit ? "Edit transaction" : "New transaction"}
+                  {isEdit
+                    ? isTransfer
+                      ? "Edit transfer"
+                      : "Edit transaction"
+                    : isTransfer
+                    ? "New transfer"
+                    : "New transaction"}
                 </h2>
                 <button
                   onClick={handleClose}
@@ -240,12 +426,15 @@ export default function AddTransactionSheet({
                       </div>
                       <div>
                         <h3 className="text-sm font-semibold text-brand-dark">
-                          Delete this transaction?
+                          Delete this {isTransfer ? "transfer" : "transaction"}?
                         </h3>
                         <p className="text-sm text-brand-dark/40 mt-1 leading-relaxed">
                           This ${Number(editTransaction!.amount).toFixed(2)}{" "}
-                          {editTransaction!.type} will be permanently removed.
-                          Your account balance will update.
+                          {isTransfer ? "transfer" : editTransaction!.type} will
+                          be permanently removed.{" "}
+                          {isTransfer
+                            ? "Both account balances will update."
+                            : "Your account balance will update."}
                         </p>
                       </div>
                     </div>
@@ -281,31 +470,34 @@ export default function AddTransactionSheet({
                 </div>
               ) : (
                 <form onSubmit={handleSubmit} className="space-y-5">
-                  {/* Type switcher */}
-                  <div className="grid grid-cols-2 gap-1 p-1 bg-brand-dark/5 rounded-2xl">
-                    <button
-                      type="button"
-                      onClick={() => handleTypeChange("expense")}
-                      className={`py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                        type === "expense"
-                          ? "bg-brand-beige text-brand-dark shadow-sm"
-                          : "text-brand-dark/40"
-                      }`}
-                    >
-                      Expense
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleTypeChange("income")}
-                      className={`py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                        type === "income"
-                          ? "bg-brand-beige text-brand-green shadow-sm"
-                          : "text-brand-dark/40"
-                      }`}
-                    >
-                      Income
-                    </button>
-                  </div>
+                  {/* Mode switcher (3 tabs). Hidden in EDIT mode — type is locked. */}
+                  {!isEdit && (
+                    <div className="grid grid-cols-3 gap-1 p-1 bg-brand-dark/5 rounded-2xl">
+                      {(["expense", "income", "transfer"] as const).map((m) => {
+                        const isActive = mode === m;
+                        const activeColor =
+                          m === "income"
+                            ? "text-brand-green"
+                            : m === "transfer"
+                            ? "text-brand-dark"
+                            : "text-brand-dark";
+                        return (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => handleModeChange(m)}
+                            className={`py-2.5 rounded-xl text-sm font-semibold transition-all capitalize ${
+                              isActive
+                                ? `bg-brand-beige ${activeColor} shadow-sm`
+                                : "text-brand-dark/40"
+                            }`}
+                          >
+                            {m}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {/* Amount */}
                   <div>
@@ -315,7 +507,7 @@ export default function AddTransactionSheet({
                     <div className="relative">
                       <span
                         className={`absolute left-4 top-1/2 -translate-y-1/2 text-xl font-semibold ${
-                          type === "income"
+                          mode === "income"
                             ? "text-brand-green/60"
                             : "text-brand-dark/30"
                         }`}
@@ -331,7 +523,7 @@ export default function AddTransactionSheet({
                         onChange={(e) => setAmount(e.target.value)}
                         placeholder="0.00"
                         className={`w-full pl-9 pr-4 py-3.5 bg-white/60 border border-brand-dark/10 rounded-2xl text-2xl font-bold placeholder:text-brand-dark/15 focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors ${
-                          type === "income"
+                          mode === "income"
                             ? "text-brand-green"
                             : "text-brand-dark"
                         }`}
@@ -339,119 +531,82 @@ export default function AddTransactionSheet({
                     </div>
                   </div>
 
-                  {/* Category */}
-                  <div>
-                    <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
-                      Category
-                    </label>
-                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                      {categoryList.map((cat) => {
-                        const isSelected = category === cat.value;
-                        const Icon = cat.icon;
-                        // Expense categories use existing color system; income uses brand-green
-                        const expenseStyle =
-                          type === "expense"
-                            ? getCategoryStyle(cat.value)
-                            : null;
-                        const iconColor = isSelected
-                          ? "text-brand-accent"
-                          : type === "income"
-                          ? "text-brand-green/70"
-                          : expenseStyle?.iconColor ?? "text-brand-dark/50";
+                  {/* Category — hidden for transfers */}
+                  {!isTransfer && (
+                    <div>
+                      <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
+                        Category
+                      </label>
+                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                        {categoryList.map((cat) => {
+                          const isSelected = category === cat.value;
+                          const Icon = cat.icon;
+                          const expenseStyle =
+                            mode === "expense"
+                              ? getCategoryStyle(cat.value)
+                              : null;
+                          const iconColor = isSelected
+                            ? "text-brand-accent"
+                            : mode === "income"
+                            ? "text-brand-green/70"
+                            : expenseStyle?.iconColor ?? "text-brand-dark/50";
 
-                        return (
-                          <button
-                            key={cat.value}
-                            type="button"
-                            onClick={() => setCategory(cat.value)}
-                            className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl border text-center transition-all ${
-                              isSelected
-                                ? "bg-brand-dark text-brand-beige border-brand-dark"
-                                : "bg-white/60 text-brand-dark/60 border-brand-dark/5 hover:border-brand-dark/15"
-                            }`}
-                          >
-                            <Icon
-                              size={18}
-                              strokeWidth={1.6}
-                              className={iconColor}
-                            />
-                            <span className="text-[11px] font-medium leading-tight">
-                              {cat.label}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Account */}
-                  <div>
-                    <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
-                      Account
-                    </label>
-                    {accounts.length === 0 ? (
-                      <p className="text-sm text-brand-dark/40 bg-brand-dark/[0.03] rounded-xl px-4 py-3">
-                        You don&apos;t have any active accounts. Create one to
-                        continue.
-                      </p>
-                    ) : (
-                      <div className="flex flex-col gap-2">
-                        {accounts.map((a) => {
-                          const typeDef = getAccountTypeByValue(a.type);
-                          const Icon = typeDef?.icon;
-                          const isSelected = accountId === a.id;
-                          const isArchived = !!a.archived_at;
                           return (
                             <button
-                              key={a.id}
+                              key={cat.value}
                               type="button"
-                              onClick={() => setAccountId(a.id)}
-                              className={`flex items-center gap-3 px-4 py-3 rounded-2xl border transition-all text-left ${
+                              onClick={() => setCategory(cat.value)}
+                              className={`flex flex-col items-center gap-1.5 p-3 rounded-2xl border text-center transition-all ${
                                 isSelected
                                   ? "bg-brand-dark text-brand-beige border-brand-dark"
-                                  : "bg-white/60 text-brand-dark border-brand-dark/10 hover:border-brand-dark/20"
+                                  : "bg-white/60 text-brand-dark/60 border-brand-dark/5 hover:border-brand-dark/15"
                               }`}
                             >
-                              {Icon && (
-                                <Icon
-                                  size={16}
-                                  strokeWidth={1.6}
-                                  className={
-                                    isSelected
-                                      ? "text-brand-accent"
-                                      : "text-brand-dark/50"
-                                  }
-                                />
-                              )}
-                              <span className="text-sm font-medium flex-1 min-w-0 truncate">
-                                {a.name}
-                                {isArchived && (
-                                  <span
-                                    className={`ml-2 text-[10px] font-normal ${
-                                      isSelected
-                                        ? "text-brand-beige/40"
-                                        : "text-brand-dark/30"
-                                    }`}
-                                  >
-                                    · archived
-                                  </span>
-                                )}
-                              </span>
-                              <span
-                                className={`text-[11px] uppercase tracking-wider ${
-                                  isSelected
-                                    ? "text-brand-beige/40"
-                                    : "text-brand-dark/30"
-                                }`}
-                              >
-                                {typeDef?.label}
+                              <Icon
+                                size={18}
+                                strokeWidth={1.6}
+                                className={iconColor}
+                              />
+                              <span className="text-[11px] font-medium leading-tight">
+                                {cat.label}
                               </span>
                             </button>
                           );
                         })}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
+
+                  {/* Account picker(s). One for income/expense, two (From/To) for transfer. */}
+                  {!isTransfer ? (
+                    <AccountPicker
+                      label="Account"
+                      accounts={accounts}
+                      selectedId={accountId}
+                      onSelect={setAccountId}
+                    />
+                  ) : (
+                    <>
+                      <AccountPicker
+                        label="From"
+                        accounts={accounts.filter(
+                          (a) => !a.archived_at || a.id === accountId
+                        )}
+                        selectedId={accountId}
+                        onSelect={setAccountId}
+                        excludeId={toAccountId}
+                      />
+                      <AccountPicker
+                        label="To"
+                        accounts={accounts.filter(
+                          (a) => !a.archived_at || a.id === toAccountId
+                        )}
+                        selectedId={toAccountId}
+                        onSelect={setToAccountId}
+                        excludeId={accountId}
+                      />
+                    </>
+                  )}
 
                   {/* Date */}
                   <div>
@@ -476,11 +631,24 @@ export default function AddTransactionSheet({
                       type="text"
                       value={note}
                       onChange={(e) => setNote(e.target.value)}
-                      placeholder="What was this for?"
+                      placeholder={
+                        isTransfer
+                          ? "Why are you moving this?"
+                          : "What was this for?"
+                      }
                       maxLength={200}
                       className="w-full px-4 py-3 bg-white/60 border border-brand-dark/10 rounded-2xl text-sm text-brand-dark placeholder:text-brand-dark/25 focus:outline-none focus:ring-2 focus:ring-brand-accent/40 focus:border-brand-accent/40 transition-colors"
                     />
                   </div>
+
+                  {/* Hint when fewer than 2 accounts and we're in transfer mode */}
+                  {isTransfer &&
+                    accounts.filter((a) => !a.archived_at).length < 2 && (
+                      <div className="bg-brand-dark/[0.04] text-brand-dark/50 text-xs px-4 py-3 rounded-xl leading-relaxed">
+                        You need at least two active accounts to transfer.
+                        Create another account first.
+                      </div>
+                    )}
 
                   {error && (
                     <div className="bg-brand-accent/10 text-brand-accent text-sm px-4 py-3 rounded-xl">
@@ -490,7 +658,7 @@ export default function AddTransactionSheet({
 
                   <button
                     type="submit"
-                    disabled={saving || success || accounts.length === 0}
+                    disabled={submitDisabled}
                     className={`w-full flex items-center justify-center gap-2 font-semibold py-3.5 rounded-2xl transition-all text-sm active:scale-[0.98] disabled:cursor-not-allowed ${
                       success
                         ? "bg-brand-green text-brand-beige"
@@ -500,7 +668,7 @@ export default function AddTransactionSheet({
                     {success ? (
                       <>
                         <Check size={18} strokeWidth={2.5} />
-                        {isEdit ? "Updated" : "Added"}
+                        {isEdit ? "Updated" : isTransfer ? "Transferred" : "Added"}
                       </>
                     ) : saving ? (
                       <>
@@ -508,9 +676,11 @@ export default function AddTransactionSheet({
                         Saving…
                       </>
                     ) : isEdit ? (
-                      "Update transaction"
+                      isTransfer ? "Update transfer" : "Update transaction"
+                    ) : isTransfer ? (
+                      "Add transfer"
                     ) : (
-                      `Add ${type}`
+                      `Add ${mode}`
                     )}
                   </button>
 
@@ -521,7 +691,7 @@ export default function AddTransactionSheet({
                       className="w-full flex items-center justify-center gap-2 py-3 rounded-2xl text-sm font-medium text-brand-accent/60 hover:text-brand-accent hover:bg-brand-accent/5 transition-colors"
                     >
                       <Trash2 size={14} />
-                      Delete this transaction
+                      Delete this {isTransfer ? "transfer" : "transaction"}
                     </button>
                   )}
                 </form>
@@ -535,3 +705,90 @@ export default function AddTransactionSheet({
     </AnimatePresence>
   );
 }
+
+/* ── Reusable account picker (one or two of these per form) ── */
+
+interface AccountPickerProps {
+  label: string;
+  accounts: Account[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  /** Hide this id from the list (used to prevent picking same account on both sides of a transfer) */
+  excludeId?: string;
+}
+
+function AccountPicker({
+  label,
+  accounts,
+  selectedId,
+  onSelect,
+  excludeId,
+}: AccountPickerProps) {
+  const visible = accounts.filter((a) => a.id !== excludeId);
+
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-brand-dark/40 uppercase tracking-wider mb-2">
+        {label}
+      </label>
+      {visible.length === 0 ? (
+        <p className="text-sm text-brand-dark/40 bg-brand-dark/[0.03] rounded-xl px-4 py-3">
+          No account available.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {visible.map((a) => {
+            const typeDef = getAccountTypeByValue(a.type);
+            const Icon = typeDef?.icon;
+            const isSelected = selectedId === a.id;
+            const isArchived = !!a.archived_at;
+            return (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => onSelect(a.id)}
+                className={`flex items-center gap-3 px-4 py-3 rounded-2xl border transition-all text-left ${
+                  isSelected
+                    ? "bg-brand-dark text-brand-beige border-brand-dark"
+                    : "bg-white/60 text-brand-dark border-brand-dark/10 hover:border-brand-dark/20"
+                }`}
+              >
+                {Icon && (
+                  <Icon
+                    size={16}
+                    strokeWidth={1.6}
+                    className={
+                      isSelected ? "text-brand-accent" : "text-brand-dark/50"
+                    }
+                  />
+                )}
+                <span className="text-sm font-medium flex-1 min-w-0 truncate">
+                  {a.name}
+                  {isArchived && (
+                    <span
+                      className={`ml-2 text-[10px] font-normal ${
+                        isSelected
+                          ? "text-brand-beige/40"
+                          : "text-brand-dark/30"
+                      }`}
+                    >
+                      · archived
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={`text-[11px] uppercase tracking-wider ${
+                    isSelected ? "text-brand-beige/40" : "text-brand-dark/30"
+                  }`}
+                >
+                  {typeDef?.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+

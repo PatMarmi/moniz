@@ -6,6 +6,10 @@ import { Plus, Pencil, Landmark } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { createClient } from "@/lib/supabase/client";
 import { getAccountTypeByValue } from "@/lib/constants";
+import {
+  computeAccountBalances,
+  type BalanceTx,
+} from "@/lib/account-balance";
 import AddAccountSheet from "@/components/add-account-sheet";
 import type { Account, AccountWithBalance } from "@/types/database";
 
@@ -53,17 +57,12 @@ export default function AccountsPage() {
         .eq("user_id", user.id),
     ]);
 
-    const txs = txRes.data ?? [];
-    const deltas: Record<string, number> = {};
-    for (const tx of txs) {
-      const delta = tx.type === "income" ? Number(tx.amount) : -Number(tx.amount);
-      deltas[tx.account_id] = (deltas[tx.account_id] || 0) + delta;
-    }
-
-    const withBalance: AccountWithBalance[] = (accRes.data ?? []).map((a) => ({
-      ...a,
-      current_balance: Number(a.starting_balance) + (deltas[a.id] || 0),
-    }));
+    // Helper handles all four type values, including transfer_in/out
+    const txs = (txRes.data as BalanceTx[] | null) ?? [];
+    const withBalance = computeAccountBalances(
+      accRes.data ?? [],
+      txs
+    ) as AccountWithBalance[];
 
     setAccounts(withBalance);
     setLoading(false);

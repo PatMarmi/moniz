@@ -50,7 +50,7 @@ export interface Account {
   created_at: string;
 }
 
-export type TxType = "income" | "expense";
+export type TxType = "income" | "expense" | "transfer_in" | "transfer_out";
 
 export interface Transaction {
   id: string;
@@ -66,6 +66,10 @@ export interface Transaction {
   created_at: string;
   /** Set when this row was auto-posted from a recurring expense */
   posted_from_recurring_id?: string | null;
+  /** Shared id linking the two paired rows of a transfer */
+  transfer_group_id?: string | null;
+  /** The OTHER account in a transfer pair (destination on transfer_out, source on transfer_in) */
+  paired_account_id?: string | null;
 }
 
 /** Account with derived balance — computed client-side from transactions */

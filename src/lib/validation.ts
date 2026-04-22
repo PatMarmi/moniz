@@ -113,6 +113,32 @@ export const transactionSchema = z
     }
   });
 
+// ── Transfer (account-to-account, paired ledger rows) ──
+//
+// Validates user input from the UI, before we expand it into two
+// `transactions` rows (transfer_out + transfer_in).
+
+export const transferSchema = z
+  .object({
+    from_account_id: z.string().uuid("Pick a source account"),
+    to_account_id: z.string().uuid("Pick a destination account"),
+    amount: z.number().gt(0, "Amount must be greater than 0"),
+    date: z
+      .string()
+      .min(1, "Pick a date")
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date"),
+    note: z
+      .string()
+      .trim()
+      .max(200, "Note is too long")
+      .optional()
+      .or(z.literal("")),
+  })
+  .refine((d) => d.from_account_id !== d.to_account_id, {
+    message: "From and To must be different accounts",
+    path: ["to_account_id"],
+  });
+
 // ── Helper ──
 
 export function firstError(err: z.ZodError): string {

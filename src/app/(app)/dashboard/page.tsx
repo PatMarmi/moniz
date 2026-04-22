@@ -16,14 +16,11 @@ import { getCategoryByValue, getAccountTypeByValue } from "@/lib/constants";
 import MonthSelector from "@/components/month-selector";
 import { monthStart, isCurrentMonth, daysLeftIn, prevMonthStart, formatMonth } from "@/lib/months";
 import { useAutoPostRecurring } from "@/lib/use-auto-post-recurring";
+import {
+  computeAccountBalances,
+  type BalanceTx,
+} from "@/lib/account-balance";
 import type { Transaction, Budget, RecurringExpense, Account } from "@/types/database";
-
-/** Minimal transaction fields needed to compute balances */
-interface BalanceTx {
-  account_id: string;
-  type: "income" | "expense";
-  amount: number;
-}
 
 function formatMoney(n: number): string {
   return Math.abs(n).toLocaleString(undefined, {
@@ -128,15 +125,8 @@ export default function DashboardPage() {
   const hasPrevData = prevExpenses.length > 0;
 
   // ── Account balances (all-time, NOT filtered by selected month) ──
-  const accountDeltas: Record<string, number> = {};
-  for (const tx of allTxns) {
-    const delta = tx.type === "income" ? Number(tx.amount) : -Number(tx.amount);
-    accountDeltas[tx.account_id] = (accountDeltas[tx.account_id] || 0) + delta;
-  }
-  const accountsWithBalance = accounts.map((a) => ({
-    ...a,
-    current_balance: Number(a.starting_balance) + (accountDeltas[a.id] || 0),
-  }));
+  // The helper handles all four type values (income, expense, transfer_in, transfer_out)
+  const accountsWithBalance = computeAccountBalances(accounts, allTxns);
   const totalAccountBalance = accountsWithBalance.reduce(
     (s, a) => s + a.current_balance,
     0
